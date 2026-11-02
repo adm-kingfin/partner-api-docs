@@ -205,3 +205,43 @@ GET  /ftt/deals/v1?group=real&ids=   → poll until status != proceed
 ## Full OpenAPI spec
 
 See `swagger.partner.yaml` (next to this file) for complete schema definitions with all field constraints.
+
+---
+
+# Quotes WebSocket
+
+Real-time mid prices of the trading pairs. Endpoint: `wss://partner-ws.1f3d4.tech/`
+
+## Auth
+
+Handshake headers: `X-API-Key: <key>` (same key as the Partner API) + connection from a whitelisted IP. Set your own `User-Agent` (Python's `Python-urllib` default is rejected at the edge). `Origin` is not checked. No user JWT.
+
+Refusals are not HTTP statuses: the handshake completes (101), then the server closes at once with code 1008 and reason `missing_key` | `invalid_key` | `ip_not_allowed` | `inactive` | `connection_limit` (max 10 concurrent connections per key). Connection attempts are rate-limited per IP: HTTP 429 before the handshake (may arrive as 502) → back off.
+
+## Frames
+
+Both directions: a JSON array of events, possibly several per frame — process the whole array.
+Event: `{"e": <code>, "t": <1 push (default) | 2 request | 3 response>, "uuid": "<your id>", "d": <data>, "err": [{"mess","code"}]}`
+Response: same `e` and `uuid`, `t: 3`; failed response has `err` and no `d`. Error codes: `invalid_request` (bad data, unknown or disabled pair; unparseable frame → `e: 0`), `unknown_event`, `system_error` (retry). Connection stays open on errors.
+
+## Events
+
+- 12 subscribe (request): `[{"e":12,"t":2,"uuid":"s1","d":[{"pair":"EURUSD"},{"pair":"GBPUSD"}]}]` → `[{"e":12,"t":3,"uuid":"s1"}]`. Pair IDs = `id` from GET /ftt/pairs/v1. `{"pair":"*"}` = all pairs incl. future ones. One unknown pair fails the whole request, nothing changes. No pair limit; duplicates are not duplicated.
+- 13 unsubscribe (request): same shape. Unsubscribing `*` keeps pairs subscribed by name.
+- 1 tick (push): `[{"e":1,"d":[{"p":"EURUSD","t":1793633897.821,"q":1.11976}]}]`. `p` pair, `t` Unix seconds with ms (float), `q` mid rounded to pair precision. Several ticks per frame. No snapshot: first tick on next price change. Per pair ticks never go back in time.
+- 220 closing (push): `[{"e":220,"d":[]}]`, then close 1012 `Reconnect required` in a few seconds → reconnect now and resubscribe.
+
+Subscriptions belong to the connection: resubscribe after every reconnect.
+
+## Flow control
+
+Read continuously. A lagging client gets the latest unsent price per pair (older ones are replaced), but data already in network buffers arrives first. A client that stops reading is dropped after ~10 s without a close frame. Server pings every 15 s; the library must answer pings; no answer for ~60 s → closed. Inbound frame max 64 KiB (else close 1009). Many requests without reading responses → close 1008 `too many pending responses`.
+
+## Close codes
+
+- 1008 `missing_key` | `invalid_key` | `ip_not_allowed` | `inactive` | `connection_limit` — refused at connect.
+- 1008 `card changed: <reason>` — access revoked while connected (key revoked, suspended, IP removed); fix the setup, do not loop.
+- 1008 `too many pending responses`; 1009 frame too big; 1012 `Reconnect required` — planned restart.
+- No close frame — network drop or stalled reader.
+
+Reconnect: on 220/1012 at once; otherwise exponential backoff 1 s → 60 s cap with jitter; never retry `invalid_key`/`ip_not_allowed`/`inactive` in a loop.

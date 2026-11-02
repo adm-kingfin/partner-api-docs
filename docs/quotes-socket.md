@@ -23,7 +23,7 @@ Open a WebSocket to the endpoint with your API key in a header:
 
 The connection must come from one of your whitelisted IPs. `Origin` is not checked — the socket is meant for server-to-server use.
 
-**Connections per key.** One connection carries any number of pairs; one or two connections are usually enough. Up to 10 concurrent connections per API key are accepted, the next one is refused with `connection_limit`.
+**Connections per key.** One connection carries any number of pairs; one or two connections are usually enough. Keep it under 10 concurrent connections per API key: above that, new connections may be refused with `connection_limit`.
 
 ### Refused connection
 
@@ -35,7 +35,7 @@ The handshake always completes (`101 Switching Protocols`). If the connection is
 | `invalid_key` | The key is unknown |
 | `ip_not_allowed` | The connection comes from an IP that is not whitelisted for this key |
 | `inactive` | API access for this key is suspended — contact your manager |
-| `connection_limit` | The key already has the maximum number of open connections |
+| `connection_limit` | This server already holds the maximum number of connections for this key |
 
 Read the close code and message from your WebSocket library: an HTTP status is not used for these refusals.
 
@@ -97,10 +97,10 @@ Subscriptions belong to the connection: after a reconnect, subscribe again.
 
 ## Ticks
 
-Each price change of a subscribed pair arrives as event `1`. One frame can carry ticks of several pairs:
+Each price change of a subscribed pair arrives as event `1`. Several ticks in one frame come as several events — iterate over every event of the frame and over every item of its `d`:
 
 ```json
-[{"e": 1, "d": [{"p": "EURUSD", "t": 1793633897.821, "q": 1.11976}, {"p": "GBPUSD", "t": 1793633897.84, "q": 1.33012}]}]
+[{"e": 1, "d": [{"p": "EURUSD", "t": 1793633897.821, "q": 1.11976}]}, {"e": 1, "d": [{"p": "GBPUSD", "t": 1793633897.84, "q": 1.33012}]}]
 ```
 
 | Field | Description |
@@ -115,7 +115,7 @@ Each price change of a subscribed pair arrives as event `1`. One frame can carry
 
 Read the socket continuously and process ticks off the reading thread. If your client falls behind, the server keeps only the **latest** unsent price per pair instead of a queue of stale ones, so you catch up quickly. Data already on its way through the network is still delivered first — after a pause, expect a burst of older ticks before the current ones.
 
-A client that stops reading entirely is disconnected after about 10 seconds without a close frame — see [Reconnecting](#reconnecting).
+A client that stops reading entirely is disconnected without a close frame: once the network buffers are full, a write that takes more than 10 seconds drops the connection; if nothing is being sent (quiet pairs), the 60-second ping timeout applies — see [Keep-alive](#keep-alive) and [Reconnecting](#reconnecting).
 
 ---
 
@@ -266,9 +266,9 @@ The service is restarting. A few seconds later the connection is closed with cod
 Uses the [`websockets`](https://websockets.readthedocs.io/) library (version 13 or newer):
 
 ```python
-import asyncio, json, random
+import asyncio, json, random, time
 from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 URL = "wss://partner-ws.1f3d4.tech/"
 API_KEY = "your-api-key"
@@ -297,18 +297,21 @@ async def session():
 async def main():
     delay = 1
     while True:
+        started = time.monotonic()
         try:
             await session()
-            delay = 1
         except ConnectionClosed as e:
             reason = e.rcvd.reason if e.rcvd else ""
             if reason in FATAL or reason.startswith("card changed"):
                 raise SystemExit(f"access refused: {reason}")
-            delay = 1 if e.rcvd and e.rcvd.code == 1012 else delay
-        except OSError:
+            if e.rcvd and e.rcvd.code == 1012:   # planned restart: reconnect at once
+                delay = 0
+        except (WebSocketException, OSError, asyncio.TimeoutError):  # refused (429/502), network, timeout
             pass
+        if time.monotonic() - started > 60:      # the connection lived a while: reset the backoff
+            delay = min(delay, 1)
         await asyncio.sleep(delay + random.random())
-        delay = min(delay * 2, 60)
+        delay = min(max(delay * 2, 1), 60)
 
 asyncio.run(main())
 ```

@@ -216,7 +216,7 @@ Real-time mid prices of the trading pairs. Endpoint: `wss://partner-ws.1f3d4.tec
 
 Handshake headers: `X-API-Key: <key>` (same key as the Partner API) + connection from a whitelisted IP. Set your own `User-Agent` (Python's `Python-urllib` default is rejected at the edge). `Origin` is not checked. No user JWT.
 
-Refusals are not HTTP statuses: the handshake completes (101), then the server closes at once with code 1008 and reason `missing_key` | `invalid_key` | `ip_not_allowed` | `inactive` | `connection_limit` (max 10 concurrent connections per key). Connection attempts are rate-limited per IP: HTTP 429 before the handshake (may arrive as 502) → back off.
+Refusals are not HTTP statuses: the handshake completes (101), then the server closes at once with code 1008 and reason `missing_key` | `invalid_key` | `ip_not_allowed` | `inactive` | `connection_limit` (keep under 10 concurrent connections per key). Connection attempts are rate-limited per IP: HTTP 429 before the handshake (may arrive as 502) → back off.
 
 ## Frames
 
@@ -228,14 +228,14 @@ Response: same `e` and `uuid`, `t: 3`; failed response has `err` and no `d`. Err
 
 - 12 subscribe (request): `[{"e":12,"t":2,"uuid":"s1","d":[{"pair":"EURUSD"},{"pair":"GBPUSD"}]}]` → `[{"e":12,"t":3,"uuid":"s1"}]`. Pair IDs = `id` from GET /ftt/pairs/v1. `{"pair":"*"}` = all pairs incl. future ones. One unknown pair fails the whole request, nothing changes. No pair limit; duplicates are not duplicated.
 - 13 unsubscribe (request): same shape. Unsubscribing `*` keeps pairs subscribed by name.
-- 1 tick (push): `[{"e":1,"d":[{"p":"EURUSD","t":1793633897.821,"q":1.11976}]}]`. `p` pair, `t` Unix seconds with ms (float), `q` mid rounded to pair precision. Several ticks per frame. No snapshot: first tick on next price change. Per pair ticks never go back in time.
+- 1 tick (push): `[{"e":1,"d":[{"p":"EURUSD","t":1793633897.821,"q":1.11976}]}]`. `p` pair, `t` Unix seconds with ms (float), `q` mid rounded to pair precision. One tick per event; a frame may carry several tick events — iterate all events and all `d` items. No snapshot: first tick on next price change. Per pair ticks never go back in time.
 - 220 closing (push): `[{"e":220,"d":[]}]`, then close 1012 `Reconnect required` in a few seconds → reconnect now and resubscribe.
 
 Subscriptions belong to the connection: resubscribe after every reconnect.
 
 ## Flow control
 
-Read continuously. A lagging client gets the latest unsent price per pair (older ones are replaced), but data already in network buffers arrives first. A client that stops reading is dropped after ~10 s without a close frame. Server pings every 15 s; the library must answer pings; no answer for ~60 s → closed. Inbound frame max 64 KiB (else close 1009). Many requests without reading responses → close 1008 `too many pending responses`.
+Read continuously. A lagging client gets the latest unsent price per pair (older ones are replaced), but data already in network buffers arrives first. A client that stops reading is dropped without a close frame: after buffers fill, a write over 10 s drops it; with nothing to send, the 60 s ping timeout applies. Server pings every 15 s; the library must answer pings; no answer for ~60 s → closed. Inbound frame max 64 KiB (else close 1009). Many requests without reading responses → close 1008 `too many pending responses`.
 
 ## Close codes
 

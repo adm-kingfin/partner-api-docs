@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kingfin Partner API — reference</title>
+  <style>
+    body { margin: 0; background: #121215; }
+    :root { --scalar-font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .dark-mode {
+      --scalar-background-1: #121215;
+      --scalar-background-2: #1b1b21;
+      --scalar-background-3: #24242b;
+      --scalar-color-1: #e2e2e8;
+      --scalar-color-accent: #ffdc00;
+      --scalar-button-1: #ffdc00;
+      --scalar-button-1-color: #121215;
+    }
+    .light-mode { --scalar-color-accent: #7a6900; }
+  </style>
+</head>
+<body>
+  <script id="api-reference" data-url="openapi.yaml"></script>
+  <script>
+    document.getElementById('api-reference').dataset.configuration = JSON.stringify({
+      darkMode: true,
+      hideDownloadButton: false,
+      hideModels: false,
+      // The API is server-to-server: calls from a browser fail (no CORS, IP whitelist),
+      // and Scalar's default proxy would carry the partner's API key to a third party.
+      hideTestRequestButton: true,
+      hideClientButton: true,
+      proxyUrl: null,
+      telemetry: false,
+      withDefaultFonts: false,
+      metaData: { title: 'Kingfin Partner API' }
+    });
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.76.4"></script>
+</body>
+</html>

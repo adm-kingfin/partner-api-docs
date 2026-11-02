@@ -1,0 +1,207 @@
+# Partner API
+
+S2S API for contracted partners. Base URL: `https://gw.olymptrade.com/partner`
+
+## Onboarding
+
+Partner sends the manager: server IPs (single or CIDR) for the whitelist, default country (ISO 3166-1 alpha-2) used when POST /users/v1 omits `country`. Partner receives: API key, partner identifier (affiliate ID or ref). Verify with GET /ping/v1.
+
+## Auth
+
+Every request: `X-API-Key: <key>` header + request from whitelisted IP.
+User-scoped endpoints additionally: `Authorization: Bearer <partner-jwt>`
+
+Partner JWT: issued by POST /token/v1, 15 min TTL, no refresh, opaque (do not parse). Bound to your partner identifier: a token of another partner → 403.
+Missing/unknown API key, or missing/invalid/expired JWT → 401 `unauthorized`.
+Account state re-checked on every JWT request: blocked or deleted → 403 access_denied, even before the token expires. Check failure → same 403, retryable. Not final: passes again after unblock/restore.
+
+## Error envelope
+
+All errors:
+```json
+{"error": {"id": "<category>", "msg": "<text>", "ctx": {"code": "<specific-code>"}, "tid": "<trace-id>"}}
+```
+`ctx` is optional: `ctx.code` is the specific code; some errors add fields (409 idempotency_key_in_flight adds `deal_id`). Categories: `invalid_request` (400/409/422), `unauthorized` (401), `access_denied` (403), `throttling` (429), `internal` (500/502).
+
+## Endpoints
+
+### GET /ping/v1
+Auth: X-API-Key
+Response 200: `{"status":"ok","partner_id":42}` (affiliate) or `{"status":"ok","partner_ref":"inf_example"}` (influencer, cpa)
+Your partner identifier (affiliate ID or ref) is assigned at onboarding; users registered via the API or your referral links are attributed to you by it.
+
+---
+
+### POST /users/v1
+Auth: X-API-Key
+Register a user. No captcha.
+
+Request:
+```json
+{"email":"user@example.com","password":"optional","country":"RU"}
+```
+- `password`: optional; if omitted a random password is set (user signs in via SSO link)
+- `country`: ISO 3166-1 alpha-2, optional, falls back to the default agreed at onboarding
+
+Response 201: `{"user_id":123456}`. Creates a real and a demo account, both USD.
+
+Errors:
+- 409 `ctx.code=email_exists` — email already registered
+- 403 `ctx.code=country_not_allowed` — country blocked
+- 422 `ctx.code=validation` — rejected by the platform
+- 400 (no ctx.code) — malformed body / invalid email, details in msg
+
+---
+
+### POST /token/v1
+Auth: X-API-Key
+Issue partner JWT for a user.
+
+Request: `{"user_id":123456}`
+
+Checks: the user is attributed to you; the account must be active: blocked or deleted → refused; state is read on every call.
+On failure: 403 access_denied, no detail (prevents user enumeration).
+
+Response 200:
+```json
+{"token":"eyJ...","token_type":"Bearer","expires_in":900}
+```
+
+---
+
+### POST /users/sso-link/v2
+Auth: X-API-Key
+Generate one-time SSO URL. Signs the user in on the platform domain serving their country, redirects to redirect_url.
+
+Request:
+```json
+{"user_id":123456,"redirect_url":"/payin"}
+```
+- `redirect_url`: relative path only, no `://` — absolute URLs rejected
+
+Response 200:
+```json
+{"url":"https://<host>/callback/partner-sso/v2/route?token=abc","expires_at":1753700000}
+```
+URL carries the token only; redirect_url travels inside it.
+Link TTL: 3 h. One-time use. One live link per user: a new link cancels the previous one. Messenger link previews do not use it up.
+Rate limit: 30/user/hour → 429 on exceed.
+Checks: same as /token/v1 → 403; repeated when the link is opened (API access inactive, user not yours, account blocked or deleted → no session, browser redirected to the default page).
+When opened, the link refines the user's country from where it is opened and redirects to that country's domain; the session is created there. Do not rely on the host of url.
+
+---
+
+### GET /accounts/v1
+Auth: X-API-Key + Bearer JWT
+List user's trading accounts.
+
+Response 200:
+```json
+{"accounts":[{"id":7890001,"type":"real","currency":"USD","balance":1000.00}]}
+```
+Account types: `real` (real money), `demo` (virtual funds).
+
+---
+
+### POST /ftt/deals/v1
+Auth: X-API-Key + Bearer JWT
+Open FTT deal. Requires `Idempotency-Key` header (8–128 chars).
+
+Request:
+```json
+{"account_id":7890001,"amount":10.00,"dir":"up","pair":"EURUSD","group":"real","duration":60}
+```
+- `dir`: `up` | `down`
+- `group`: `real` | `demo`
+- `duration`: seconds, must be within pair's min_duration..max_duration
+
+Response 201 (new): `{"deal":{...}}`
+
+Deal object:
+```json
+{"id":555001,"account_id":7890001,"status":"proceed","pair":"EURUSD","dir":"up","amount":10.00,"group":"real","win_percent":82,"time_open":1753700000,"time_close":1753700060}
+```
+`account_id`: account the deal was opened on — use it to tell apart deals of two accounts within the same `group`.
+Statuses (exact values): `proceed` (open) → `win` | `loose` (lost) | `standoff` (closed at open price) | `cancel` (cancelled by platform) | `error` (platform error, contact support)
+
+Errors:
+- 400 `ctx.code=idempotency_key_required` — missing Idempotency-Key or not 8–128 chars
+- 409 `ctx.code=idempotency_key_in_flight` — see Idempotency
+- 422 `ctx.code=idempotency_key_conflict` — same key, different body
+- 422 business errors, `ctx.code` is lowercase text, compare exactly: `insufficiently funds`, `not enough money to trade`, `common not enough real funds`, `insufficient bonus balance`, `amount limit`, `pair amount limit`, `all pairs amount limit`, `pair amount time limit exceed` / `all pairs amount time limit exceed` (+ ` (minute)`/` (hour)`/` (day)` variants), `max deal limit exceed`, `invalid duration`, `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available`, `account not found`, `location not allowed`, `restricted personally`, `validation`. Others may appear — any 422 means the deal was not opened.
+
+---
+
+### GET /ftt/deals/v1
+Auth: X-API-Key + Bearer JWT
+Fetch deals by IDs.
+
+Query: `?group=real&ids=555001,555002` (`group` required: `real`|`demo`; `ids` comma-separated, max 100; omit → empty array)
+
+Response 200: `{"deals":[{...}]}`
+Deal object: same schema as POST response.
+
+Errors:
+- 400 `ctx.code=invalid_group` — group missing or not real/demo
+- 400 `ctx.code=too_many_ids` — more than 100 IDs
+- 400 `ctx.code=invalid_ids` — non-integer or non-positive ID
+
+---
+
+### GET /ftt/deals/v1/limits
+Auth: X-API-Key + Bearer JWT
+Deal amount limits per currency.
+
+Response 200:
+```json
+{"limits":[{"currency":"USD","min":1.00,"default":1.00}]}
+```
+
+---
+
+### GET /ftt/pairs/v1
+Auth: X-API-Key (no JWT)
+Available FTT trading pairs. Disabled/locked pairs excluded.
+
+Response 200:
+```json
+{"pairs":[{"id":"EURUSD","title":"EUR/USD","group":"forex","precision":5,"min_duration":30,"max_duration":300,"time_close":1790542800,"time_open":1790546400,"win_percent":82},{"id":"BTCUSD","title":"BTC/USD","group":"crypto","precision":2,"min_duration":60,"max_duration":600}]}
+```
+- `time_close`/`time_open`: the next trading break as Unix timestamps — trading stops at `time_close`, resumes at `time_open` (close comes first, both usually in the future); no break scheduled → both keys absent (BTCUSD above), the pair trades 24/7 — check key presence, not `== 0`
+- every listed pair is tradable now until `time_close`; during a break the pair is absent from the list
+- `win_percent`: omitted if unavailable
+
+Use `id` as `pair` in deal requests.
+
+## Rate limits
+
+600 req/min per partner (all endpoints), 100 req/min per user (user-scoped endpoints), 30 SSO links/user/hour.
+429 `throttling`, `ctx.limit` = limit hit, `ctx.expired` = window reset (Unix seconds, fractional). Retry after it.
+
+## Idempotency (POST /ftt/deals/v1)
+
+Same key + same body within 24h → 409 `idempotency_key_in_flight`, no second deal created.
+  error.ctx.deal_id present → deal was opened, poll `GET /ftt/deals/v1?group=...&ids=<deal_id>`.
+  error.ctx.deal_id absent → still in progress or ambiguous: retry with the same key shortly; if it persists, contact support — never reopen with a new key.
+Same key + different body → 422 `idempotency_key_conflict`.
+On 422 business error: deal not opened, retry with same key is safe.
+On network error or 5xx/timeout: outcome unknown — retry with the SAME key, never a new one (a new key can open a duplicate deal).
+  201 → first attempt never arrived, deal opened now; 409 with deal_id → deal was opened;
+  409 without deal_id → still in progress or ambiguous: retry with same key after a few seconds, if it persists contact support.
+
+## Integration sequence
+
+```
+POST /users/v1            → user_id
+POST /token/v1            → bearer JWT (reissue before 15 min elapse or on 401)
+POST /users/sso-link/v2   → one-time URL → redirect user's browser
+GET  /ftt/pairs/v1        → pick pair + check min/max duration
+GET  /accounts/v1         → get account_id, check balance vs limits
+GET  /ftt/deals/v1/limits → validate amount >= min
+POST /ftt/deals/v1        → deal_id
+GET  /ftt/deals/v1?group=real&ids=   → poll until status != proceed
+```
+
+## Full OpenAPI spec
+
+See `swagger.partner.yaml` (next to this file) for complete schema definitions with all field constraints.

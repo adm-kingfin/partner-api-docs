@@ -1,0 +1,48 @@
+site_name: Kingfin Partner API
+site_description: Server-to-server API for Kingfin partners — register traders, sign them in, open deals.
+copyright: © Kingfin
+repo_url: null
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - scheme: slate
+      toggle: {icon: material/weather-sunny, name: Light mode}
+    - scheme: default
+      toggle: {icon: material/weather-night, name: Dark mode}
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - assets/stylesheets/kingfin.css
+
+extra:
+  generator: false
+
+nav:
+  - Home: index.md
+  - Integration guide: guide.md
+  - API reference: reference.md
+  - Changelog: changelog.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details

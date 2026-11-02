@@ -1,0 +1,999 @@
+openapi: 3.0.3
+
+info:
+  title: Partner API
+  description: |
+    S2S API for contracted partners (bots, external services).
+
+    ## Authentication
+
+    All endpoints under `/partner` require two things:
+    - `X-API-Key` header — your partner API key
+    - Requests must come from a whitelisted IP (CIDR ranges agreed on during onboarding)
+
+    Endpoints that operate on behalf of a specific user additionally require:
+    - `Authorization: Bearer <token>` — a Partner JWT obtained from `POST /partner/token/v1`
+
+    Partner JWTs are short-lived (15 minutes) and opaque. There is no refresh — issue a new token when needed.
+    A missing or unknown API key, or a missing, invalid or expired JWT, returns `401` / `unauthorized`.
+
+    Rate limits: 600 requests per minute per partner (all endpoints together), 100 per minute
+    per user on user-scoped endpoints, 30 SSO links per user per hour. Exceeding a limit returns
+    `429` / `throttling` with `ctx.limit` and `ctx.expired` (when the window resets).
+
+    The user's account state is re-checked on every user-scoped request: once the account is
+    blocked or deleted, a token issued before that gets `403 access_denied`, even before it
+    expires. The refusal is not final: after the account is unblocked
+    or restored, requests pass again.
+
+    ## Error format
+
+    All errors follow the same envelope:
+
+    ```json
+    {
+      "error": {
+        "id": "invalid_request",
+        "msg": "human-readable message",
+        "ctx": { "code": "machine_readable_code" }
+      }
+    }
+    ```
+
+    Common error `id` values: `invalid_request`, `access_denied`, `throttling`, `internal`.
+
+  version: "1.0.0"
+
+servers:
+  - url: https://{host}/partner
+    description: Partner API base path
+    variables:
+      host:
+        default: gw.olymptrade.com
+        description: Gateway host provided during onboarding
+
+tags:
+  - name: Health
+    description: Connectivity check
+  - name: Users
+    description: Register and authenticate partner users
+  - name: Token
+    description: Issue partner JWT for a user
+  - name: SSO
+    description: One-time SSO link for seamless platform login
+  - name: Accounts
+    description: User trading accounts and balances
+  - name: Deals
+    description: FTT deal operations
+  - name: Pairs
+    description: Available trading pairs
+
+paths:
+
+  /ping/v1:
+    get:
+      tags: [Health]
+      summary: Connectivity check
+      description: |
+        Verifies that your API key and IP are accepted. Returns your partner identifier
+        assigned at onboarding: `partner_id` (affiliate ID) or `partner_ref` (ref).
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResponse"
+              example:
+                status: ok
+                partner_id: 42
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/v1:
+    post:
+      tags: [Users]
+      summary: Register a user
+      description: |
+        Registers a new user on behalf of the partner. No captcha required.
+
+        - If `password` is omitted, a random password is set; the user signs in through an SSO link.
+        - If `country` is omitted, the default country agreed during onboarding is used.
+        - On success, two trading accounts are created: real and demo, both in USD.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterUserRequest"
+            example:
+              email: user@example.com
+              country: RU
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterUserResponse"
+              example:
+                user_id: 123456
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Country is blocked for registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: access_denied
+                  msg: registration not allowed for country
+                  ctx:
+                    code: country_not_allowed
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: invalid_request
+                  msg: email already registered
+                  ctx:
+                    code: email_exists
+        "422":
+          description: Registration data rejected by the platform (e.g. invalid email format)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: invalid_request
+                  msg: invalid registration data
+                  ctx:
+                    code: validation
+
+  /token/v1:
+    post:
+      tags: [Token]
+      summary: Issue partner JWT
+      description: |
+        Issues a short-lived partner JWT (15 minutes) for a user. Treat the token as opaque.
+
+        The user must be attributed to you (registered through the API or your referral
+        links) and the account must be active: blocked or deleted accounts are refused.
+
+        Use this token in the `Authorization: Bearer` header for user-scoped endpoints
+        (`/accounts/v1`, `/ftt/deals/v1`, `/ftt/deals/v1/limits`).
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueTokenRequest"
+            example:
+              user_id: 123456
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueTokenResponse"
+              example:
+                token: eyJhbGciOiJSUzI1NiJ9...
+                token_type: Bearer
+                expires_in: 900
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: User does not belong to this partner, or the user's account is blocked or deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: access_denied
+                  msg: access denied
+
+  /users/sso-link/v2:
+    post:
+      tags: [SSO]
+      summary: Generate SSO link
+      description: |
+        Generates a one-time SSO link that signs the user in to the platform on the domain
+        that serves their country and redirects them to `redirect_url`.
+
+        When opened, the link is re-checked, the user's country is refined from where the
+        link is opened, and the browser is sent to the domain for that country; the session
+        is created on that domain. The country domain is chosen when the
+        link is opened, not when it is issued, so do not rely on the host of `url`.
+
+        - `redirect_url` must be a relative path (e.g. `/payin`). Absolute URLs are rejected.
+        - The link expires in 3 hours and works once.
+        - A user has at most one live link: a new one cancels the previous one.
+        - Link previews in messengers do not use the link up.
+        - The same checks as `/token/v1`, repeated when the link is opened.
+        - Rate limited: max 30 links per user per hour.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SSOLinkRequest"
+            example:
+              user_id: 123456
+              redirect_url: /payin
+      responses:
+        "200":
+          description: SSO link generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SSOLinkResponse"
+              example:
+                url: https://gw.olymptrade.com/callback/partner-sso/v2/route?token=abc123
+                expires_at: 1753700000
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: User does not belong to this partner, or the user's account is blocked or deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: access_denied
+                  msg: access denied
+        "429":
+          description: Too many SSO link requests for this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: throttling
+                  msg: too many sso-link requests for this user
+
+  /accounts/v1:
+    get:
+      tags: [Accounts]
+      summary: List user accounts
+      description: Returns all trading accounts with balances for the authenticated user.
+      security:
+        - ApiKeyAuth: []
+          PartnerUserJWT: []
+      responses:
+        "200":
+          description: Account list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountListResponse"
+              example:
+                accounts:
+                  - id: 7890001
+                    type: real
+                    currency: USD
+                    balance: 1000.00
+                  - id: 7890002
+                    type: demo
+                    currency: USD
+                    balance: 10000.00
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenUser"
+
+  /ftt/deals/v1:
+    post:
+      tags: [Deals]
+      summary: Open a deal
+      description: |
+        Opens a Fixed Time Trade deal for the authenticated user.
+
+        **Idempotency:** The `Idempotency-Key` header is required (8–128 chars).
+        Repeating the same key with the same body within 24 hours returns `409` /
+        `idempotency_key_in_flight` — no second deal is created. `ctx.deal_id` is present in the
+        409 response when the deal was opened — use it to poll `GET /ftt/deals/v1`. The same key
+        with a different body returns `422` / `idempotency_key_conflict`.
+        On `422` business errors the key is released and can be reused safely. On network
+        errors, `5xx` or timeouts the outcome is unknown — retry with the **same** key, never a
+        new one: `201` means the first attempt never arrived, `409` with `deal_id` means the deal
+        was opened, `409` without `deal_id` means it is still in progress or ended ambiguously —
+        retry with the same key after a few seconds; if `deal_id` still does not appear, contact
+        support and do not reopen the deal with a new key.
+        A new key after a timeout can open a duplicate deal.
+
+        **Direction:** `up` = call, `down` = put.
+
+        **Group:** `real` or `demo`.
+      security:
+        - ApiKeyAuth: []
+          PartnerUserJWT: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique key for idempotent submission (8–128 characters)
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          example: order-2026-07-29-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenDealRequest"
+            example:
+              account_id: 7890001
+              amount: 10.00
+              dir: up
+              pair: EURUSD
+              group: real
+              duration: 60
+      responses:
+        "201":
+          description: Deal opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenDealResponse"
+              example:
+                deal:
+                  id: 555001
+                  account_id: 7890001
+                  status: proceed
+                  pair: EURUSD
+                  dir: up
+                  amount: 10.00
+                  group: real
+                  win_percent: 82
+                  time_open: 1753700000
+                  time_close: 1753700060
+        "409":
+          description: |
+            Idempotency key already in use with the same body. `ctx.deal_id` is present when
+            the deal was opened — use it to poll `GET /ftt/deals/v1`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: invalid_request
+                  msg: "idempotency key in-flight: retry with the same key or poll by deal_id"
+                  ctx:
+                    code: idempotency_key_in_flight
+                    deal_id: 555001
+        "400":
+          description: |
+            Invalid request. `ctx.code` = `idempotency_key_required` when the `Idempotency-Key`
+            header is missing or not 8–128 characters; otherwise no `ctx.code`, details in `msg`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenUser"
+        "422":
+          description: |
+            Business rule violation — the deal was not opened. `ctx.code` is lowercase text, compare
+            exactly: `insufficiently funds`, `not enough money to trade`, `common not enough real funds`,
+            `insufficient bonus balance`, `amount limit`, `pair amount limit`, `all pairs amount limit`,
+            `pair amount time limit exceed` / `all pairs amount time limit exceed` (and `(minute)`,
+            `(hour)`, `(day)` variants), `max deal limit exceed`, `invalid duration`, `pair unavailable`,
+            `pair unavailable on open`, `pair unavailable on close`, `quotes not available`,
+            `account not found`, `location not allowed`, `restricted personally`, `validation`,
+            `idempotency_key_conflict`. Other codes may appear.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: invalid_request
+                  msg: "deal rejected: insufficiently funds"
+                  ctx:
+                    code: insufficiently funds
+
+    get:
+      tags: [Deals]
+      summary: Get deals by IDs
+      description: |
+        Returns deals by their IDs. Only deals belonging to the authenticated user are returned.
+
+        Maximum 100 IDs per request.
+      security:
+        - ApiKeyAuth: []
+          PartnerUserJWT: []
+      parameters:
+        - name: group
+          in: query
+          required: true
+          description: Deal group — must match the group the deal was opened with
+          schema:
+            type: string
+            enum: [real, demo]
+          example: real
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated list of deal IDs (max 100)
+          schema:
+            type: string
+          example: "555001,555002,555003"
+      responses:
+        "200":
+          description: Deal list (empty array if no IDs provided or none found)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DealListResponse"
+              example:
+                deals:
+                  - id: 555001
+                    account_id: 7890001
+                    status: win
+                    pair: EURUSD
+                    dir: up
+                    amount: 10.00
+                    group: real
+                    win_percent: 82
+                    time_open: 1753700000
+                    time_close: 1753700060
+        "400":
+          description: |
+            Invalid query. `ctx.code`: `invalid_group` (`group` missing or not `real`/`demo`),
+            `too_many_ids` (more than 100), `invalid_ids` (an ID is not a positive integer).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenUser"
+
+  /ftt/deals/v1/limits:
+    get:
+      tags: [Deals]
+      summary: Get deal limits
+      description: |
+        Returns minimum and default deal amounts per currency.
+        Use this to validate `amount` before opening a deal.
+      security:
+        - ApiKeyAuth: []
+          PartnerUserJWT: []
+      responses:
+        "200":
+          description: Limits per currency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DealLimitsResponse"
+              example:
+                limits:
+                  - currency: USD
+                    min: 1.00
+                    default: 1.00
+                  - currency: EUR
+                    min: 1.00
+                    default: 1.00
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenUser"
+
+  /ftt/pairs/v1:
+    get:
+      tags: [Pairs]
+      summary: List available trading pairs
+      description: |
+        Returns all trading pairs currently available for FTT deals.
+
+        - Disabled or locked pairs are excluded.
+        - `win_percent` is included when available (omitted otherwise).
+        - Every listed pair can be traded now, until its `time_close`.
+        - `time_close` / `time_open` are the pair's next trading break as Unix timestamps: trading
+          stops at `time_close` and resumes at `time_open`. A pair with no break scheduled trades 24/7
+          and has neither field — check whether the key is present, do not compare it with `0`.
+
+        This endpoint requires only partner authentication (no user JWT).
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: List of trading pairs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairsListResponse"
+              example:
+                pairs:
+                  - id: EURUSD
+                    title: EUR/USD
+                    group: forex
+                    precision: 5
+                    min_duration: 30
+                    max_duration: 300
+                    time_close: 1790542800
+                    time_open: 1790546400
+                    win_percent: 82
+                  - id: BTCUSD
+                    title: BTC/USD
+                    group: crypto
+                    precision: 2
+                    min_duration: 60
+                    max_duration: 600
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Partner API key issued during onboarding. Requests must also originate from a whitelisted IP.
+    PartnerUserJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Partner JWT issued by `POST /partner/token/v1`. Valid for 15 minutes.
+
+  schemas:
+
+    # -- Health --
+
+    PingResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+        partner_id:
+          type: integer
+          format: int64
+          description: Your affiliate ID. Present for affiliate partners only.
+          example: 42
+        partner_ref:
+          type: string
+          description: Your ref. Present for influencer and CPA partners only.
+          example: inf_example
+
+    # -- Users --
+
+    RegisterUserRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 255
+          example: user@example.com
+        password:
+          type: string
+          description: If omitted, a random password is generated.
+          example: "s3cr3t"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2. If omitted, partner's default country is used.
+          example: RU
+
+    RegisterUserResponse:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          example: 123456
+
+    # -- Token --
+
+    IssueTokenRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 123456
+
+    IssueTokenResponse:
+      type: object
+      required: [token, token_type, expires_in]
+      properties:
+        token:
+          type: string
+          description: Partner JWT. Opaque — pass it as is, do not parse it.
+          example: eyJhbGciOiJSUzI1NiJ9...
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds
+          example: 900
+
+    # -- SSO --
+
+    SSOLinkRequest:
+      type: object
+      required: [user_id, redirect_url]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 123456
+        redirect_url:
+          type: string
+          description: Relative path on the platform to redirect after login (e.g. `/payin`). Absolute URLs are not accepted.
+          example: /payin
+
+    SSOLinkResponse:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: One-time SSO URL. Carries the token only; opens a platform session and redirects to `redirect_url`.
+          example: https://gw.olymptrade.com/callback/partner-sso/v2/route?token=abc123
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp when the link expires
+          example: 1753700000
+
+    # -- Accounts --
+
+    AccountListResponse:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Account"
+
+    Account:
+      type: object
+      required: [id, type, currency, balance]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 7890001
+        type:
+          type: string
+          description: Account group (`real` = real money, `demo` = virtual funds)
+          enum: [real, demo]
+          example: real
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          example: USD
+        balance:
+          type: number
+          format: double
+          example: 1000.00
+
+    # -- Deals --
+
+    OpenDealRequest:
+      type: object
+      required: [account_id, amount, dir, pair, group, duration]
+      properties:
+        account_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Account ID to debit
+          example: 7890001
+        amount:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+          description: Deal amount in the account currency
+          example: 10.00
+        dir:
+          type: string
+          enum: [up, down]
+          description: Trade direction (`up` = call, `down` = put)
+          example: up
+        pair:
+          type: string
+          description: Trading pair ID (from `/ftt/pairs/v1`)
+          example: EURUSD
+        group:
+          type: string
+          enum: [real, demo]
+          description: Account group to trade on
+          example: real
+        duration:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Deal duration in seconds
+          example: 60
+
+    OpenDealResponse:
+      type: object
+      required: [deal]
+      properties:
+        deal:
+          $ref: "#/components/schemas/Deal"
+
+    DealListResponse:
+      type: object
+      required: [deals]
+      properties:
+        deals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deal"
+
+    Deal:
+      type: object
+      required: [id, account_id, status, pair, dir, amount, group, win_percent, time_open, time_close]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 555001
+        account_id:
+          type: integer
+          format: int64
+          description: |
+            Account the deal was opened on. Use it to tell apart deals of two
+            accounts within the same `group` (e.g. two real accounts).
+          example: 7890001
+        status:
+          type: string
+          description: |
+            Deal status: `proceed` while open; then `win`, `loose` (lost), `standoff` (closed at the
+            opening price), `cancel` (cancelled by the platform) or `error` (platform error).
+          enum: [proceed, win, loose, standoff, cancel, error]
+          example: win
+        pair:
+          type: string
+          example: EURUSD
+        dir:
+          type: string
+          enum: [up, down]
+          example: up
+        amount:
+          type: number
+          format: double
+          example: 10.00
+        group:
+          type: string
+          enum: [real, demo]
+          example: real
+        win_percent:
+          type: integer
+          description: Payout percentage at time of deal open
+          example: 82
+        time_open:
+          type: integer
+          format: int64
+          description: Unix timestamp of deal open
+          example: 1753700000
+        time_close:
+          type: integer
+          format: int64
+          description: Unix timestamp of deal close (expiry)
+          example: 1753700060
+
+    DealLimitsResponse:
+      type: object
+      required: [limits]
+      properties:
+        limits:
+          type: array
+          items:
+            $ref: "#/components/schemas/DealLimitEntry"
+
+    DealLimitEntry:
+      type: object
+      required: [currency, min, default]
+      properties:
+        currency:
+          type: string
+          example: USD
+        min:
+          type: number
+          format: double
+          description: Minimum deal amount
+          example: 1.00
+        default:
+          type: number
+          format: double
+          description: Default deal amount (equals minimum)
+          example: 1.00
+
+    # -- Pairs --
+
+    PairsListResponse:
+      type: object
+      required: [pairs]
+      properties:
+        pairs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Pair"
+
+    Pair:
+      type: object
+      required: [id, title, group, precision, min_duration, max_duration]
+      properties:
+        id:
+          type: string
+          description: Pair identifier, use as `pair` in deal requests
+          example: EURUSD
+        title:
+          type: string
+          example: EUR/USD
+        group:
+          type: string
+          description: Asset class
+          example: forex
+        precision:
+          type: integer
+          description: Price decimal precision
+          example: 5
+        min_duration:
+          type: integer
+          format: int64
+          description: Minimum deal duration in seconds
+          example: 30
+        max_duration:
+          type: integer
+          format: int64
+          description: Maximum deal duration in seconds
+          example: 300
+        time_open:
+          type: integer
+          format: int64
+          description: End of the pair's next trading break — when trading resumes (Unix timestamp). Absent when no break is scheduled — the pair trades 24/7.
+          example: 1790546400
+        time_close:
+          type: integer
+          format: int64
+          description: Start of the pair's next trading break — when trading stops (Unix timestamp). Absent when no break is scheduled — the pair trades 24/7.
+          example: 1790542800
+        win_percent:
+          type: integer
+          description: Current payout percentage. Omitted if not available.
+          example: 82
+
+    # -- Errors --
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+
+    ErrorBody:
+      type: object
+      required: [id, msg]
+      properties:
+        id:
+          type: string
+          description: Machine-readable error category
+          enum:
+            - invalid_request
+            - unauthorized
+            - access_denied
+            - throttling
+            - internal
+          example: invalid_request
+        msg:
+          type: string
+          description: Human-readable message
+          example: email already registered
+        tid:
+          type: string
+          description: Request trace ID — quote it when contacting support
+        ctx:
+          type: object
+          description: Optional structured context. Fields depend on the error.
+          properties:
+            code:
+              type: string
+              description: Specific error code within the category
+              example: email_exists
+            deal_id:
+              type: integer
+              format: int64
+              description: Present on `409 idempotency_key_in_flight` when the deal was opened
+            limit:
+              type: integer
+              description: On `429` — the limit that was hit
+            expired:
+              type: number
+              description: On `429` — when the limit window resets (Unix timestamp, seconds)
+
+  responses:
+
+    Unauthorized:
+      description: Missing or unknown API key; on user-scoped endpoints also a missing, invalid or expired JWT
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              id: unauthorized
+              msg: invalid api key
+
+    ForbiddenUser:
+      description: IP not whitelisted, API access suspended, token issued to another partner, or the user's account is blocked or deleted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              id: access_denied
+              msg: access denied
+
+    Forbidden:
+      description: IP not whitelisted or API access suspended
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              id: access_denied
+              msg: forbidden
+
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            error:
+              id: invalid_request
+              msg: invalid request body

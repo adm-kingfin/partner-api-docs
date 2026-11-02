@@ -1,5 +1,5 @@
 site_name: Kingfin Partner API
-site_description: Server-to-server API for Kingfin partners — register traders, sign them in, open deals.
+site_description: Server-to-server API for Kingfin partners — register traders, sign them in, open deals, stream quotes.
 copyright: © Kingfin
 repo_url: null
 
@@ -34,6 +34,7 @@ nav:
   - Home: index.md
   - Integration guide: guide.md
   - API reference: reference.md
+  - Quotes WebSocket: quotes-socket.md
   - Changelog: changelog.md
 
 markdown_extensions:

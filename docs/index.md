@@ -1,5 +1,4 @@
 ---
-title: Kingfin Partner API
 hide: [navigation, toc]
 ---
 

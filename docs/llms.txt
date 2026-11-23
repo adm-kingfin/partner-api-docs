@@ -13,7 +13,14 @@ User-scoped endpoints additionally: `Authorization: Bearer <partner-jwt>`
 
 Partner JWT: issued by POST /token/v1, 15 min TTL, no refresh, opaque (do not parse). Bound to your partner identifier: a token of another partner → 403.
 Missing/unknown API key, or missing/invalid/expired JWT → 401 `unauthorized`.
-Account state re-checked on every JWT request: blocked or deleted → 403 access_denied, even before the token expires. Check failure → same 403, retryable. Not final: passes again after unblock/restore.
+Account state re-checked on every JWT request: blocked → 403 access_denied `ctx.code=user_banned`, deleted → `user_deleted`, even before the token expires. Check failure → 403 `access_check_failed`, retryable. Not final: passes again after unblock/restore (may take a short time).
+
+User refusal codes (403 access_denied, on /token/v1, /users/sso-link/v2 and JWT requests), in `ctx.code`:
+- `user_banned` — account blocked; final until unblocked
+- `user_deleted` — account deleted; final until restored
+- `user_not_attributed` — user not attributed to you, or no such user_id (not told apart); final, check the user_id
+- `access_check_failed` — state could not be checked; retry with backoff
+Block reason is not disclosed. Partner-level 403 (IP, suspended access, token of another partner) — no `ctx.code`.
 
 ## Error envelope
 
@@ -60,7 +67,7 @@ Issue partner JWT for a user.
 Request: `{"user_id":123456}`
 
 Checks: the user is attributed to you; the account must be active: blocked or deleted → refused; state is read on every call.
-On failure: 403 access_denied, no detail (prevents user enumeration).
+On failure: 403 access_denied with a user refusal code in `ctx.code` (see above); a foreign and a non-existent user get the same answer.
 
 Response 200:
 ```json
@@ -86,7 +93,7 @@ Response 200:
 URL carries the token only; redirect_url travels inside it.
 Link TTL: 3 h. One-time use. One live link per user: a new link cancels the previous one. Messenger link previews do not use it up.
 Rate limit: 30/user/hour → 429 on exceed.
-Checks: same as /token/v1 → 403; repeated when the link is opened (API access inactive, user not yours, account blocked or deleted → no session, browser redirected to the default page).
+Checks: same as /token/v1 → 403 with the same refusal codes; repeated when the link is opened (API access inactive, user not yours, account blocked or deleted → no session, browser redirected to the default page).
 When opened, the link refines the user's country from where it is opened and redirects to that country's domain; the session is created there. Do not rely on the host of url.
 
 ---

@@ -66,7 +66,7 @@ The JWT is issued by `POST /partner/token/v1`. It is:
 
 A token is bound to your partner identifier: a token issued to another partner returns `403`.
 
-The user's account state is re-checked on every user-scoped request as well. Once the account is blocked or deleted, a token issued before that gets `403 access_denied`, even before it expires. If the state cannot be checked, the request is refused the same way and can be retried. The refusal is not final: after the account is unblocked or restored, requests pass again.
+The user's account state is re-checked on every user-scoped request as well. Once the account is blocked or deleted, a token issued before that gets `403 access_denied` with `ctx.code` `user_banned` or `user_deleted`, even before it expires. If the state cannot be checked, the request is refused with `ctx.code` `access_check_failed` and can be retried. The refusal is not final: after the account is unblocked or restored, requests pass again; the change may take a short time to apply. See [User access refusals](#user-access-refusals).
 
 ---
 
@@ -102,9 +102,35 @@ Branch on `id`, HTTP status and `ctx.code`. `msg` is for humans: its wording may
 |------|------|---------|
 | `invalid_request` | 400, 409, 422 | Bad input, validation failure, business rule violation |
 | `unauthorized` | 401 | Missing or unknown API key; missing, invalid or expired partner JWT |
-| `access_denied` | 403 | IP not whitelisted, your API access suspended (contact your manager), user belongs to another partner, user's account is blocked or deleted |
+| `access_denied` | 403 | IP not whitelisted, your API access suspended (contact your manager), user not attributed to you, user's account is blocked or deleted — see [User access refusals](#user-access-refusals) |
 | `throttling` | 429 | Rate limit exceeded |
 | `internal` | 500, 502 | Server-side error, retry with backoff |
+
+### User access refusals
+
+When you are refused access to a specific user — on `POST /token/v1`, `POST /users/sso-link/v2` and every request with a partner JWT — the answer is `403` with `id: access_denied`, and `ctx.code` says why:
+
+| `ctx.code` | Meaning | Retry? |
+|------------|---------|--------|
+| `user_banned` | The user's account is blocked | No — the same answer until the account is unblocked |
+| `user_deleted` | The user's account is deleted | No — the same answer until the account is restored |
+| `user_not_attributed` | The user is not [attributed to you](#your-partner-identifier), or no user has this `user_id` | No — check the `user_id` (on JWT requests — the user the token was issued for) |
+| `access_check_failed` | The user's state could not be checked | Yes, with backoff |
+
+Other `403` answers — IP not whitelisted, API access suspended, a token issued to another partner — come without `ctx.code`.
+
+`user_not_attributed` deliberately does not tell whether the user exists. The reason a user is blocked is not disclosed; if you need it, contact your manager.
+
+```json
+{
+  "error": {
+    "id": "access_denied",
+    "msg": "user account is blocked",
+    "ctx": { "code": "user_banned" },
+    "tid": "4bf92f3577b34da6"
+  }
+}
+```
 
 ---
 
@@ -224,7 +250,7 @@ Issues a short-lived Partner JWT for a user. Required before calling user-scoped
 - The user must be [attributed to you](#your-partner-identifier).
 - The user's account must be active: blocked or deleted accounts are refused. The state is read on every call, so a refusal is not final — once the account is unblocked or restored, the token is issued again.
 
-Violations return `403` without revealing which check failed (to avoid user enumeration).
+Violations return `403 access_denied` with the reason in `ctx.code` — see [User access refusals](#user-access-refusals). A user of another partner and a `user_id` that does not exist get the same answer.
 
 ---
 
@@ -247,7 +273,7 @@ Generates a one-time URL that signs the user in to the platform on the domain th
 | `user_id` | Yes | Must be [attributed to you](#your-partner-identifier) |
 | `redirect_url` | Yes | Relative path only (e.g. `/payin`, `/trading`). Absolute URLs are rejected with `400`. |
 
-**Access rules:** the same checks as `POST /token/v1` — the user is attributed to you and the account is active. Violations return `403`.
+**Access rules:** the same checks as `POST /token/v1` — the user is attributed to you and the account is active. Violations return `403 access_denied` with the reason in `ctx.code` — see [User access refusals](#user-access-refusals).
 
 **Response `200`:**
 ```json

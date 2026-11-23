@@ -22,9 +22,14 @@ info:
     `429` / `throttling` with `ctx.limit` and `ctx.expired` (when the window resets).
 
     The user's account state is re-checked on every user-scoped request: once the account is
-    blocked or deleted, a token issued before that gets `403 access_denied`, even before it
-    expires. The refusal is not final: after the account is unblocked
-    or restored, requests pass again.
+    blocked or deleted, a token issued before that gets `403 access_denied` (`ctx.code`
+    `user_banned` / `user_deleted`), even before it expires; if the state cannot be checked —
+    `access_check_failed`, retry. The refusal is not final: after the account is unblocked
+    or restored, requests pass again (may take a short time).
+
+    A refusal to act for a user is `403 access_denied` with the reason in `ctx.code`:
+    `user_banned`, `user_deleted`, `user_not_attributed` (not attributed to you, or no such
+    user — the two are not told apart) or `access_check_failed` (the only retryable one).
 
     ## Error format
 
@@ -203,7 +208,11 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: User does not belong to this partner, or the user's account is blocked or deleted
+          description: |
+            IP not whitelisted or API access suspended, or access to this user is refused.
+            For a user refusal `ctx.code` is `user_banned`, `user_deleted`,
+            `user_not_attributed` (not attributed to you, or no such user) or
+            `access_check_failed` (retryable).
           content:
             application/json:
               schema:
@@ -211,7 +220,9 @@ paths:
               example:
                 error:
                   id: access_denied
-                  msg: access denied
+                  msg: user account is blocked
+                  ctx:
+                    code: user_banned
 
   /users/sso-link/v2:
     post:
@@ -258,7 +269,11 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: User does not belong to this partner, or the user's account is blocked or deleted
+          description: |
+            IP not whitelisted or API access suspended, or access to this user is refused.
+            For a user refusal `ctx.code` is `user_banned`, `user_deleted`,
+            `user_not_attributed` (not attributed to you, or no such user) or
+            `access_check_failed` (retryable).
           content:
             application/json:
               schema:
@@ -266,7 +281,9 @@ paths:
               example:
                 error:
                   id: access_denied
-                  msg: access denied
+                  msg: user account is blocked
+                  ctx:
+                    code: user_banned
         "429":
           description: Too many SSO link requests for this user
           content:
@@ -939,7 +956,12 @@ components:
           properties:
             code:
               type: string
-              description: Specific error code within the category
+              description: |
+                Specific error code within the category. On `403 access_denied` for a
+                user refusal: `user_banned`, `user_deleted` (final until the account is
+                unblocked or restored), `user_not_attributed` (the user is not attributed
+                to you or does not exist — the two are not told apart),
+                `access_check_failed` (the state could not be checked — retry with backoff).
               example: email_exists
             deal_id:
               type: integer
@@ -966,7 +988,11 @@ components:
               msg: invalid api key
 
     ForbiddenUser:
-      description: IP not whitelisted, API access suspended, token issued to another partner, or the user's account is blocked or deleted
+      description: |
+        IP not whitelisted, API access suspended, token issued to another partner, or the
+        user's account is blocked or deleted. For a user refusal `ctx.code` is
+        `user_banned`, `user_deleted`, `user_not_attributed` or `access_check_failed`
+        (retryable). Partner-level refusals come without `ctx.code`.
       content:
         application/json:
           schema:
@@ -974,7 +1000,9 @@ components:
           example:
             error:
               id: access_denied
-              msg: access denied
+              msg: user account is blocked
+              ctx:
+                code: user_banned
 
     Forbidden:
       description: IP not whitelisted or API access suspended

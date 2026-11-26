@@ -408,7 +408,7 @@ See [Idempotency](#idempotency) for details.
 | `pair amount limit`, `all pairs amount limit`, `pair amount time limit exceed`, `all pairs amount time limit exceed` and their `(minute)` / `(hour)` / `(day)` variants | Trading volume limit for the pair or across all pairs reached |
 | `max deal limit exceed` | Too many open deals |
 | `invalid duration` | `duration` is outside the pair's `min_duration`–`max_duration` |
-| `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available` | The pair cannot be traded right now |
+| `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available` | The pair cannot be traded right now or is not available to this user |
 | `account not found` | `account_id` cannot be used for this deal |
 | `location not allowed`, `restricted personally` | Trading is not allowed for this user |
 | `validation` | Request data rejected |
@@ -541,7 +541,9 @@ Returns all trading pairs currently available for FTT deals.
 | `time_close` / `time_open` | The pair's next trading break, as Unix timestamps: trading stops at `time_close` and resumes at `time_open`, so `time_close` comes first. Both are usually in the future. A pair with no break scheduled trades 24/7 and has **neither field** in the response (`BTCUSD` above) — check whether the key is present, do not compare it with `0`. |
 | `win_percent` | Current payout percentage. Omitted if not available. |
 
-Disabled and locked pairs are excluded from the response automatically: every pair in the list can be traded right now, until its `time_close`. During a break the pair disappears from the list and returns at `time_open`. Cache this list for a few minutes — it changes infrequently, but do not open deals on a cached pair past its `time_close`.
+Disabled, locked and not yet released pairs are excluded from the response automatically: every pair in the list can be traded right now, until its `time_close`. During a break the pair disappears from the list and returns at `time_open`. Cache this list for a few minutes — it changes infrequently, but do not open deals on a cached pair past its `time_close`.
+
+The list is the same for all your users. A pair can still be unavailable to a particular user: a deal on it is refused with `422` `pair unavailable`.
 
 ---
 

@@ -2,11 +2,14 @@
 title: Quotes WebSocket
 ---
 
-# Quotes WebSocket — Integration Guide
+# Partner WebSocket — Integration Guide
 
-Real-time prices of the trading pairs over a WebSocket. You subscribe to the pairs you need, or to all of them, and receive the mid price each time it changes.
+Real-time data over a WebSocket, in two channels you subscribe to independently on the same connection:
 
-The socket uses the same credentials as the Partner API: your **API key** and your **whitelisted server IPs**. No user token is needed — quotes are not tied to a user.
+- **Quotes** — prices of the trading pairs. You subscribe to the pairs you need, or to all of them, and receive the mid price each time it changes.
+- **Account** — deal closes and balance changes of all your users, real and demo. See [Account events](#account-events).
+
+The socket uses the same credentials as the Partner API: your **API key** and your **whitelisted server IPs**. No user token is needed — quotes are not tied to a user, and the account channel carries the events of all your users at once.
 
 Endpoint: `wss://partner-ws.1f3d4.tech/`
 
@@ -23,7 +26,7 @@ Open a WebSocket to the endpoint with your API key in a header:
 
 The connection must come from one of your whitelisted IPs. `Origin` is not checked — the socket is meant for server-to-server use.
 
-**Connections per key.** One connection carries any number of pairs; one or two connections are usually enough. Keep it under 10 concurrent connections per API key: above that, new connections may be refused with `connection_limit`.
+**Connections per key.** One connection carries any number of pairs and the account channel; one or two connections are usually enough. Keep it under 10 concurrent connections per API key: above that, new connections may be refused with `connection_limit`.
 
 ### Refused connection
 
@@ -119,6 +122,77 @@ A client that stops reading entirely is disconnected without a close frame: once
 
 ---
 
+## Account events
+
+The account channel pushes two kinds of events about **all your users** — the same users you can access through the Partner API:
+
+| Event | When | Data |
+|-------|------|------|
+| `400` | A deal of your user is closed | The deal object of [`GET /ftt/deals/v1`](guide.md#get-fttdealsv1) plus `user_id` |
+| `300` | The balance of your user's account has changed | The account object of [`GET /accounts/v1`](guide.md#get-accountsv1) plus `user_id` |
+
+Real and demo accounts come in the same channel: open demo deals with a test user to check your integration.
+
+### Subscribing
+
+Subscribe with event `100`. `d` is an empty array or omitted:
+
+```json
+[{"e": 100, "t": 2, "uuid": "acc-1"}]
+```
+
+Response:
+
+```json
+[{"e": 100, "t": 3, "uuid": "acc-1"}]
+```
+
+- You receive the events that happen **after** the response. The first event always comes after it.
+- Subscribing again on the same connection fails with `invalid_request`; the current subscription stays and events are not duplicated.
+- Each subscribed connection receives every event. If you subscribe on two connections, each of them gets all events.
+
+Unsubscribe with event `101`; no account event comes after its response. Without a subscription it just answers:
+
+```json
+[{"e": 101, "t": 2, "uuid": "acc-2"}]
+```
+
+### Deal close — `400`
+
+```json
+[{"e": 400, "d": [{"user_id": 42, "id": 555001, "account_id": 7890001, "status": "win", "pair": "EURUSD", "dir": "up", "amount": 10.00, "group": "real", "win_percent": 82, "time_open": 1753700000, "time_close": 1753700060}]}]
+```
+
+The fields, types and values are the same as in `GET /ftt/deals/v1` for this deal, so one parser serves both; `user_id` is added because the channel carries all your users. `status` is one of the final statuses — `proceed` never comes here. Deals of real and demo accounts are numbered separately: identify a deal by `group` **and** `id`.
+
+### Balance change — `300`
+
+```json
+[{"e": 300, "d": [{"user_id": 42, "id": 7890001, "type": "real", "currency": "USD", "balance": 1018.2}]}]
+```
+
+The fields and values are the same as in `GET /accounts/v1`: `balance` is the balance of the account after the change, main plus bonus. The amount and the kind of the operation are not sent: treat `balance` as the latest state of the account, not as a transaction log.
+
+**Opening a deal does not change the balance** and sends no `300`. The balance changes when the deal is closed — a `300` comes together with the `400` — and on deposits, withdrawals and other operations on the account.
+
+### Delivery guarantees
+
+The account channel is a **live stream**: it speeds up your integration, but **the REST API stays the source of truth**.
+
+- **No replay.** Events that happened while you were not connected or not subscribed are not sent later. There are no sequence numbers and no way to resume from a position.
+- **At least once.** While the connection is open and subscribed, every event is delivered, but an event may come **twice**. Process a deal close once per `group` + `id`; for an account, keep the latest `balance`.
+- **Order.** Events come in the order they were published for you. A deal close and the balance change it caused may come in either order, and a balance event may briefly show an older value — the next event of that account corrects it.
+- **Never dropped on a slow connection.** Unlike ticks, account events are not replaced or skipped. Each connection keeps up to **1000** unsent account events; if your client does not read fast enough and the queue overflows, the connection is closed with `1008` and the reason `lagging`. Ticks of the connection do not wait behind account events.
+
+**Recover with a snapshot.** After every connect, reconnect, `1008 lagging` or unsubscribe:
+
+1. Subscribe with `100` and wait for the response.
+2. Then read the current state over REST: `GET /accounts/v1` for the balances and `GET /ftt/deals/v1` for the deals you are waiting for.
+
+Everything after the subscription comes through the channel; everything before it is covered by the snapshot. Events and the snapshot may overlap — deduplicate as above. Reconcile with REST periodically as well: the channel does not promise that no event is ever lost.
+
+---
+
 ## Errors
 
 A failed request gets a response with `err` and no `d`. The connection stays open.
@@ -149,7 +223,7 @@ You do not need to send anything to keep an idle connection open.
 
 Connections do not live forever: the service is updated from time to time, and network paths change. Treat a disconnect as normal and reconnect automatically.
 
-**Planned restart.** The server sends event `220` and closes the connection a few seconds later with close code `1012` (`Reconnect required`). Reconnect right away — another server accepts the connection — and subscribe again.
+**Planned restart.** The server sends event `220` and closes the connection a few seconds later with close code `1012` (`Reconnect required`). Reconnect right away — another server accepts the connection — and subscribe again. With the account channel, take the REST snapshot after subscribing: events between the two connections are not replayed.
 
 ```json
 [{"e": 220, "d": []}]
@@ -163,10 +237,14 @@ Connections do not live forever: the service is updated from time to time, and n
 |------|--------|------------|
 | `1008` | `missing_key`, `invalid_key`, `ip_not_allowed`, `inactive`, `connection_limit` | The connection was refused — see [Refused connection](#refused-connection) |
 | `1008` | `card changed: <reason>` | Your access changed while connected: the key was revoked (`invalid_key`), suspended (`inactive`) or this IP was removed (`ip_not_allowed`). Fix the setup before reconnecting |
+| `1008` | `lagging` | Your client did not read account events fast enough — reconnect, subscribe and take the REST snapshot (see [Delivery guarantees](#delivery-guarantees)) |
+| `1008` | `card changed: partner_changed` | The [partner identifier](guide.md#your-partner-identifier) of your key has changed (agreed with your manager). Reconnect: the new connection carries the users of the new identifier |
 | `1008` | `too many pending responses` | Too many requests were sent without reading the responses. Read the socket continuously |
 | `1009` | — | A frame you sent is larger than 64 KiB |
 | `1012` | `Reconnect required` | Planned restart — reconnect |
 | none | — | The connection was dropped (network, or the client stopped reading) — reconnect with backoff |
+
+**Closing the connection yourself.** When your client closes the connection (code `1000`), the server's answering close frame may not get through the network edge: about a second later your library reports an abnormal closure (`1006`, or end of stream) instead of a clean close. This is a normal shutdown — the connection is closed on the server too; do not treat it as an error and do not reconnect.
 
 ---
 
@@ -179,7 +257,11 @@ Generated from the service code. Every event travels inside a frame — a JSON a
 | `1` | `tick:change` | push | Quote tick (mid price) |
 | `12` | `ticks:subscribe` | request → response | Subscribe to ticks |
 | `13` | `ticks:unsubscribe` | request → response | Unsubscribe from ticks |
+| `100` | `account:subscribe` | request → response | Subscribe to account events |
+| `101` | `account:unsubscribe` | request → response | Unsubscribe from account events |
 | `220` | `connection:closing` | push | The connection is about to close: reconnect |
+| `300` | `balance:change` | push | Balance change |
+| `400` | `deal:close` | push | Deal closed |
 
 ### 1 · tick:change
 
@@ -248,6 +330,44 @@ Items of `d`:
 |-------|------|----------|---------|
 | `pair` | string | yes | `EURUSD` |
 
+### 100 · account:subscribe
+
+**Subscribe to account events.**
+
+Subscribes the connection to the deal closes (`400`) and the balance changes (`300`) of all your users, real and demo accounts alike. `d` is an empty array or omitted. Events published after the response come to the connection; there is no replay of earlier ones. After connecting, after a disconnect and after close `1008` `lagging`: subscribe first, then take a snapshot via REST (`GET /partner/accounts/v1`, `GET /partner/ftt/deals/v1`) — events after the subscription come here, everything before it is in the snapshot.
+A second subscription on the same connection fails with `invalid_request`, the current one stays.
+Account events are never dropped while the connection is open. A connection that does not read them fast enough is closed with `1008` and the reason `lagging`; ticks of the connection do not wait for account events.
+
+Request:
+
+```json
+[{"e": 100, "t": 2, "uuid": "a1"}]
+```
+
+Response:
+
+```json
+[{"e": 100, "t": 3, "uuid": "a1"}]
+```
+
+### 101 · account:unsubscribe
+
+**Unsubscribe from account events.**
+
+Cancels the account subscription; no account event comes after the response. Without a subscription it just answers. `d` is an empty array or omitted.
+
+Request:
+
+```json
+[{"e": 101, "t": 2, "uuid": "a1"}]
+```
+
+Response:
+
+```json
+[{"e": 101, "t": 3, "uuid": "a1"}]
+```
+
 ### 220 · connection:closing
 
 **The connection is about to close: reconnect.**
@@ -257,6 +377,54 @@ The service is restarting. A few seconds later the connection is closed with cod
 ```json
 [{"e": 220, "d": []}]
 ```
+
+### 300 · balance:change
+
+**Balance change.**
+
+The account of your user after an operation that changed its balance: the `Account` object of `GET /partner/accounts/v1` with the same fields and values, plus `user_id`. `balance` is the main plus the bonus balance after the operation.
+An event may come twice: keep the last `balance` of an account. REST stays the source of truth; push speeds things up but does not replace reconciliation.
+
+```json
+[{"e": 300, "d": [{"balance": 1018.2, "currency": "USD", "id": 7890001, "type": "real", "user_id": 42}]}]
+```
+
+Items of `d`:
+
+| Field | Type | Required | Example |
+|-------|------|----------|---------|
+| `balance` | number | yes | `1018.2` |
+| `currency` | string | yes | `USD` |
+| `id` | integer | yes | `7890001` |
+| `type` | string | yes | `real` |
+| `user_id` | integer | yes | `42` |
+
+### 400 · deal:close
+
+**Deal closed.**
+
+A closed deal of your user, real or demo: the `Deal` object of `GET /partner/ftt/deals/v1` with the same fields and values, plus `user_id`. `status` is never `proceed`: the event is sent only on close. Deals of all your users come, not only those opened via the API.
+An event may come twice: drop duplicates by `group` and `id` (real and demo deals are numbered separately). REST stays the source of truth.
+
+```json
+[{"e": 400, "d": [{"account_id": 7890001, "amount": 10, "dir": "up", "group": "real", "id": 555001, "pair": "EURUSD", "status": "win", "time_close": 1753700060, "time_open": 1753700000, "user_id": 42, "win_percent": 82}]}]
+```
+
+Items of `d`:
+
+| Field | Type | Required | Example |
+|-------|------|----------|---------|
+| `account_id` | integer | yes | `7890001` |
+| `amount` | number | yes | `10` |
+| `dir` | string | yes | `up` |
+| `group` | string | yes | `real` |
+| `id` | integer | yes | `555001` |
+| `pair` | string | yes | `EURUSD` |
+| `status` | string | yes | `win` |
+| `time_close` | integer | yes | `1753700060` |
+| `time_open` | integer | yes | `1753700000` |
+| `user_id` | integer | yes | `42` |
+| `win_percent` | integer | yes | `82` |
 
 
 ---
@@ -302,7 +470,7 @@ async def main():
             await session()
         except ConnectionClosed as e:
             reason = e.rcvd.reason if e.rcvd else ""
-            if reason in FATAL or reason.startswith("card changed"):
+            if reason in FATAL or (reason.startswith("card changed") and not reason.endswith("partner_changed")):
                 raise SystemExit(f"access refused: {reason}")
             if e.rcvd and e.rcvd.code == 1012:   # planned restart: reconnect at once
                 delay = 0
@@ -326,3 +494,5 @@ asyncio.run(main())
 - [ ] Keep the latest price per pair by `t`; do not expect a snapshot.
 - [ ] Read continuously; let your library answer pings.
 - [ ] Reconnect on `220`/`1012` at once, otherwise with exponential backoff; do not retry refused keys in a loop.
+- [ ] Account channel: subscribe with `100`, then take the REST snapshot — after every (re)connect and `1008 lagging`.
+- [ ] Deduplicate deal closes by `group` + `id`; keep the latest `balance` per account; reconcile with REST.

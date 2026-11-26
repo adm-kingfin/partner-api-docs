@@ -536,7 +536,9 @@ paths:
       description: |
         Returns all trading pairs currently available for FTT deals.
 
-        - Disabled or locked pairs are excluded.
+        - Disabled, locked or not yet released pairs are excluded.
+        - The list is the same for all users. A pair can still be unavailable to a particular user:
+          a deal on it gets 422 `pair unavailable`.
         - `win_percent` is included when available (omitted otherwise).
         - Every listed pair can be traded now, until its `time_close`.
         - `time_close` / `time_open` are the pair's next trading break as Unix timestamps: trading

@@ -34,7 +34,7 @@ nav:
   - Home: index.md
   - Integration guide: guide.md
   - API reference: reference.md
-  - Quotes WebSocket: quotes-socket.md
+  - Partner WebSocket: quotes-socket.md
   - Changelog: changelog.md
 
 markdown_extensions:

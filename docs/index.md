@@ -6,7 +6,7 @@ hide: [navigation, toc]
 
 # Build on <span>Kingfin</span> Partner API
 
-Server-to-server API for Kingfin partners: register traders from your product, sign them in to the platform with one link, open deals on their behalf, and stream live quotes.
+Server-to-server API for Kingfin partners: register traders from your product, sign them in to the platform with one link, open deals on their behalf, and stream live quotes and account events.
 
 [Start integrating](guide.md){ .md-button .md-button--primary }
 [API reference](reference.md){ .md-button }
@@ -39,11 +39,11 @@ Server-to-server API for Kingfin partners: register traders from your product, s
 
     [Read more](guide.md#rate-limits)
 
--   **Real-time quotes**
+-   **Real-time data**
 
     ---
 
-    A WebSocket with live prices of the trading pairs: subscribe to the pairs you need, or to all of them.
+    A WebSocket with live prices of the trading pairs and with deal closes and balance changes of all your users.
 
     [Read more](quotes-socket.md)
 

@@ -1,5 +1,5 @@
 ---
-title: Quotes WebSocket
+title: Partner WebSocket
 ---
 
 # Partner WebSocket — Integration Guide

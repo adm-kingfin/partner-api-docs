@@ -8,11 +8,11 @@ info:
     ## Authentication
 
     All endpoints under `/partner` require two things:
-    - `X-API-Key` header — your partner API key
+    - `X-API-Key: <PARTNER_API_KEY>` header — your partner API key
     - Requests must come from a whitelisted IP (CIDR ranges agreed on during onboarding)
 
     Endpoints that operate on behalf of a specific user additionally require:
-    - `Authorization: Bearer <token>` — a Partner JWT obtained from `POST /partner/token/v1`
+    - `Authorization: Bearer <USER_JWT>` — a Partner JWT of the user, obtained from `POST /partner/token/v1`
 
     Partner JWTs are short-lived (15 minutes) and opaque. There is no refresh — issue a new token when needed.
     A missing or unknown API key, or a missing, invalid or expired JWT, returns `401` / `unauthorized`.
@@ -31,6 +31,12 @@ info:
     `user_banned`, `user_deleted`, `user_not_attributed` (not attributed to you, or no such
     user — the two are not told apart) or `access_check_failed` (the only retryable one).
 
+    ## Versioning
+
+    `info.version` follows semver: major — a change that can break an integration, minor — additions
+    (endpoints, optional request fields, response fields, values of `error.id`, `ctx.code` and enums,
+    a raised limit), patch — documentation only. Ignore unknown response fields and handle an unknown error by its HTTP status.
+
     ## Error format
 
     All errors follow the same envelope:
@@ -47,7 +53,7 @@ info:
 
     Common error `id` values: `invalid_request`, `access_denied`, `throttling`, `internal`.
 
-  version: "1.0.0"
+  version: "1.3.0"
 
 servers:
   - url: https://{host}/partner
@@ -655,12 +661,16 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: Partner API key issued during onboarding. Requests must also originate from a whitelisted IP.
+      description: |
+        Partner API key issued during onboarding, sent as `X-API-Key: <PARTNER_API_KEY>`.
+        Requests must also originate from a whitelisted IP.
     PartnerUserJWT:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Partner JWT issued by `POST /partner/token/v1`. Valid for 15 minutes.
+      description: |
+        Partner JWT of one user, issued by `POST /partner/token/v1`, sent as
+        `Authorization: Bearer <USER_JWT>`. Valid for 15 minutes.
 
   schemas:
 

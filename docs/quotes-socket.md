@@ -4,6 +4,8 @@ title: Partner WebSocket
 
 # Partner WebSocket — Integration Guide
 
+Protocol version: **0.4.3** — see the [changelog](changelog.md#websocket-0-4-3).
+
 Real-time data over a WebSocket, in two subscriptions you manage independently on the same connection:
 
 - **Quotes** — prices of the trading pairs. You subscribe to the pairs you need, or to all of them, and receive the mid price each time it changes.

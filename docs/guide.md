@@ -8,6 +8,8 @@ S2S API for contracted partners: Telegram bots, external trading platforms, cust
 
 Base URL: `https://gw.olymptrade.com/partner`
 
+API version: **1.3.0** — see [Versioning](#versioning) and the [changelog](changelog.md#api-1-3-0).
+
 ---
 
 
@@ -35,7 +37,7 @@ Every request requires two things:
 
 **1. API key** — sent as a header:
 ```
-X-API-Key: <your-api-key>
+X-API-Key: <PARTNER_API_KEY>
 ```
 
 **2. Whitelisted IP** — requests must originate from IPs agreed upon during onboarding. Requests from unlisted IPs return `403` even with a valid key.
@@ -56,7 +58,7 @@ It decides which field you see in responses — `partner_id` (your affiliate ID)
 Some endpoints act on behalf of a specific user (accounts, deals, the pairs of a user). These additionally require a **Partner JWT**:
 
 ```
-Authorization: Bearer <partner-jwt>
+Authorization: Bearer <USER_JWT>
 ```
 
 Endpoints added from now on show this in the path: `/partner/user/...` (singular) needs the JWT of one user, while `/partner/users/...` (plural) works on your users with the API key only and takes `user_id` in the body. `GET /accounts/v1` and `/ftt/deals/v1` predate this convention and keep their paths.
@@ -167,6 +169,8 @@ Most partner integrations follow this sequence:
 
 ### GET /ping/v1
 
+[API reference →](reference.md#tag/health/GET/ping/v1){ .kf-ref-link }
+
 Connectivity check. Use this to verify your API key and IP are accepted before going live.
 
 **Auth:** `X-API-Key`
@@ -182,6 +186,8 @@ The response carries [your partner identifier](#your-partner-identifier). Use it
 ---
 
 ### POST /users/v1
+
+[API reference →](reference.md#tag/users/POST/users/v1){ .kf-ref-link }
 
 Registers a new user on the platform on your behalf. No captcha, no email verification required.
 
@@ -226,6 +232,8 @@ Save this `user_id` — you will need it for token issuance, SSO links, and deal
 
 ### POST /token/v1
 
+[API reference →](reference.md#tag/token/POST/token/v1){ .kf-ref-link }
+
 Issues a short-lived Partner JWT for a user. Required before calling user-scoped endpoints.
 
 **Auth:** `X-API-Key`
@@ -257,6 +265,8 @@ Violations return `403 access_denied` with the reason in `ctx.code` — see [Use
 ---
 
 ### POST /users/sso-link/v2
+
+[API reference →](reference.md#tag/sso/POST/users/sso-link/v2){ .kf-ref-link }
 
 Generates a one-time URL that signs the user in to the platform on the domain that serves their country and redirects them to a specific page.
 
@@ -303,9 +313,11 @@ The country domain is chosen when the link is opened, not when it is issued: do 
 
 ### GET /accounts/v1
 
+[API reference →](reference.md#tag/accounts/GET/accounts/v1){ .kf-ref-link }
+
 Lists all trading accounts with current balances for the authenticated user.
 
-**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+**Auth:** `X-API-Key` + `Authorization: Bearer <USER_JWT>`
 
 **Response `200`:**
 ```json
@@ -340,9 +352,11 @@ Use the account's `id` as `account_id` when opening deals.
 
 ### POST /ftt/deals/v1
 
+[API reference →](reference.md#tag/deals/POST/ftt/deals/v1){ .kf-ref-link }
+
 Opens a Fixed Time Trade deal for the authenticated user.
 
-**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+**Auth:** `X-API-Key` + `Authorization: Bearer <USER_JWT>`
 
 **Required header:**
 ```
@@ -430,9 +444,11 @@ Codes are lowercase text, some with spaces and parentheses — compare them exac
 
 ### GET /ftt/deals/v1
 
+[API reference →](reference.md#tag/deals/GET/ftt/deals/v1){ .kf-ref-link }
+
 Fetches deals by their IDs. Only deals belonging to the authenticated user are returned.
 
-**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+**Auth:** `X-API-Key` + `Authorization: Bearer <USER_JWT>`
 
 **Query params:**
 
@@ -480,9 +496,11 @@ Use this to poll deal results after `time_close` has passed: poll until `status`
 
 ### GET /ftt/deals/v1/limits
 
+[API reference →](reference.md#tag/deals/GET/ftt/deals/v1/limits){ .kf-ref-link }
+
 Returns minimum and default deal amounts per currency.
 
-**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+**Auth:** `X-API-Key` + `Authorization: Bearer <USER_JWT>`
 
 **Response `200`:**
 ```json
@@ -499,6 +517,8 @@ Validate `amount` against `min` before submitting a deal to avoid `422` errors.
 ---
 
 ### GET /ftt/pairs/v1
+
+[API reference →](reference.md#tag/pairs/GET/ftt/pairs/v1){ .kf-ref-link }
 
 Returns all trading pairs currently available for FTT deals.
 
@@ -551,9 +571,11 @@ The list is the same for all your users. A pair can still be unavailable to a pa
 
 ### GET /user/ftt/pairs/v1
 
+[API reference →](reference.md#tag/pairs/GET/user/ftt/pairs/v1){ .kf-ref-link }
+
 Returns the trading pairs available to the user of the token: the pairs of [`GET /ftt/pairs/v1`](#get-fttpairsv1) this user is allowed to trade. The list follows the same availability rules as the check made when you open a deal for this user, as of the moment of the request. A pair can still be switched off or locked between your request and the deal — then the deal gets `422` `pair unavailable`: request the list again and pick another pair.
 
-**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+**Auth:** `X-API-Key` + `Authorization: Bearer <USER_JWT>`
 
 **Response `200`:** the same format and the same pair fields as [`GET /ftt/pairs/v1`](#get-fttpairsv1). `min_duration` and `max_duration` are the ones that apply to this user: a deal for the user checks `duration` against them, and they can differ from the values in `GET /ftt/pairs/v1`. `win_percent` is the payout percentage of this user — the one a deal opened now would get; it can differ from `GET /ftt/pairs/v1` too. The same rules apply to breaks: a pair leaves the list at `time_close` and returns at `time_open`. If no pair is available to the user, `pairs` is an empty array.
 
@@ -648,3 +670,23 @@ idempotency_key = str(uuid.uuid4())  # "f47ac10b-58cc-4372-a567-0e02b2c3d479"
    - `error.ctx.deal_id` present → the deal was opened; poll `GET /ftt/deals/v1?group=...&ids=<deal_id>`
    - `error.ctx.deal_id` absent → the first attempt is still in progress or ended ambiguously; retry with the same key after a few seconds. If `deal_id` still does not appear, treat the deal as unresolved and contact support — do not open it again with a new key
 5. On `429`: wait and retry with the **same key**
+
+---
+
+## Versioning
+
+The API version is shown at the top of this guide and follows [semantic versioning](https://semver.org/):
+
+| Part | Changes when | Example |
+|------|--------------|---------|
+| Major | A change can break an integration that follows this guide | An endpoint, field or value removed or renamed; a field becomes required; a limit lowered |
+| Minor | Something is added; existing integrations keep working | A new endpoint, an optional request field, a response field, a new value of `error.id`, `ctx.code` or another enum, a limit raised |
+| Patch | Only the documentation is clarified | Wording, examples |
+
+Every version is listed in the changelog. The `/v1` in a path versions that one endpoint: a breaking change to an endpoint usually comes as a new path (`/v2`) next to the old one; otherwise it bumps the major version.
+
+Minor versions add fields and values, so to stay compatible:
+
+- ignore response fields you do not know;
+- handle an unknown `error.id` or `ctx.code` by its HTTP status: `5xx` and `429` can be retried, another `4xx` will not succeed if sent again unchanged. Codes described in this guide (for example `access_check_failed`, `idempotency_key_in_flight`) follow their own rules;
+- do not fail on an unknown value of an enum (for example a deal `status`) — skip or log it.

@@ -1,6 +1,7 @@
 # Partner API
 
 S2S API for contracted partners. Base URL: `https://gw.olymptrade.com/partner`
+API version: 1.3.0 (semver: major = breaking, minor = additions or a raised limit, patch = docs only).
 
 ## Onboarding
 
@@ -8,8 +9,8 @@ Partner sends the manager: server IPs (single or CIDR) for the whitelist, defaul
 
 ## Auth
 
-Every request: `X-API-Key: <key>` header + request from whitelisted IP.
-User-scoped endpoints additionally: `Authorization: Bearer <partner-jwt>`
+Every request: `X-API-Key: <PARTNER_API_KEY>` header + request from whitelisted IP.
+User-scoped endpoints additionally: `Authorization: Bearer <USER_JWT>`
 Path convention: `/user/...` (singular) = one user, JWT required; `/users/...` (plural) = your users by API key, `user_id` in body. /accounts/v1 and /ftt/deals/v1* predate it and also need the JWT.
 
 Partner JWT: issued by POST /token/v1, 15 min TTL, no refresh, opaque (do not parse). Bound to your partner identifier: a token of another partner → 403.
@@ -220,6 +221,10 @@ POST /ftt/deals/v1        → deal_id
 GET  /ftt/deals/v1?group=real&ids=   → poll until status != proceed
 ```
 
+## Compatibility
+
+Minor versions add endpoints, response fields and values of `error.id`, `ctx.code` and enums. Ignore unknown fields; handle an unknown `error.id`/`ctx.code` by its HTTP status (5xx and 429 retryable, another 4xx fails again if resent unchanged; documented codes such as `access_check_failed`, `idempotency_key_in_flight` keep their own rules); do not fail on an unknown enum value.
+
 ## Full OpenAPI spec
 
 See `swagger.partner.yaml` (next to this file) for complete schema definitions with all field constraints.
@@ -227,6 +232,8 @@ See `swagger.partner.yaml` (next to this file) for complete schema definitions w
 ---
 
 # Partner WebSocket
+
+Protocol version: 0.4.3
 
 Two subscriptions on one connection: quotes (real-time mid prices of the trading pairs) and events (deal closes and balance changes of all your users, real and demo). Endpoint: `wss://partner-ws.1f3d4.tech/`
 

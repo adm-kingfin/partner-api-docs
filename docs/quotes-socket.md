@@ -135,7 +135,7 @@ Real and demo accounts come in the same channel: open demo deals with a test use
 
 ### Subscribing
 
-Subscribe with event `100`. `d` is an empty array or omitted:
+Subscribe with event `100`. With `d` omitted, `null` or an empty array you subscribe to **every** account event — the ones in the table above and any event added to the channel later:
 
 ```json
 [{"e": 100, "t": 2, "uuid": "acc-1"}]
@@ -147,15 +147,24 @@ Response:
 [{"e": 100, "t": 3, "uuid": "acc-1"}]
 ```
 
-- You receive the events that happen **after** the response. The first event always comes after it.
-- Subscribing again on the same connection fails with `invalid_request`; the current subscription stays and events are not duplicated.
-- Each subscribed connection receives every event. If you subscribe on two connections, each of them gets all events.
-
-Unsubscribe with event `101`; no account event comes after its response. Without a subscription it just answers:
+To receive only some events, list their codes in `d` — for example, deal closes only:
 
 ```json
-[{"e": 101, "t": 2, "uuid": "acc-2"}]
+[{"e": 100, "t": 2, "uuid": "acc-1", "d": [400]}]
 ```
+
+- You receive the events that happen **after** the response. The first event always comes after it.
+- Subscriptions add up: `[300]` and then `[400]` gives both. A `100` without codes after some codes widens the subscription to every event, without a gap.
+- The request fails with `invalid_request` and the subscription stays as it was if a code is unknown, is listed twice or is subscribed already, or if you are subscribed to every event already. Events are never duplicated.
+- Each subscribed connection receives the events it subscribed to. If you subscribe on two connections, each of them gets them.
+
+Unsubscribe with event `101`. With codes in `d` it stops only those codes, the others keep coming; without `d` (or with `null` or `[]`) it cancels the whole subscription. No event of an unsubscribed code comes after the response. A code you are not subscribed to is skipped, and without a subscription `101` just answers:
+
+```json
+[{"e": 101, "t": 2, "uuid": "acc-2", "d": [300]}]
+```
+
+Unsubscribing a code from a subscription to every event leaves the other codes the channel has now: events added to the channel later will not come. To get every event again, send `100` without codes.
 
 ### Deal close — `400`
 
@@ -334,8 +343,8 @@ Items of `d`:
 
 **Subscribe to account events.**
 
-Subscribes the connection to the deal closes (`400`) and the balance changes (`300`) of all your users, real and demo accounts alike. `d` is an empty array or omitted. Events published after the response come to the connection; there is no replay of earlier ones. After connecting, after a disconnect and after close `1008` `lagging`: subscribe first, then take a snapshot via REST (`GET /partner/accounts/v1`, `GET /partner/ftt/deals/v1`) — events after the subscription come here, everything before it is in the snapshot.
-A second subscription on the same connection fails with `invalid_request`, the current one stays.
+Subscribes the connection to the account events of all your users, real and demo accounts alike: balance changes (`300`) and deal closes (`400`). `d` lists the event codes to subscribe to, e.g. `[400]`. An empty array, `null` or no `d` subscribes to every account event, including event codes added to the channel later. Events published after the response come to the connection; there is no replay of earlier ones. After connecting, after a disconnect and after close `1008` `lagging`: subscribe first, then take a snapshot via REST (`GET /partner/accounts/v1`, `GET /partner/ftt/deals/v1`) — events after the subscription come here, everything before it is in the snapshot.
+Subscriptions add up: `[300]` and then `[400]` gives both, and an empty `d` after some codes widens the subscription to every event without a gap. The request fails with `invalid_request` and the subscription does not change if a listed code is unknown, is listed twice or is subscribed already, and if every event is subscribed already.
 Account events are never dropped while the connection is open. A connection that does not read them fast enough is closed with `1008` and the reason `lagging`; ticks of the connection do not wait for account events.
 
 Request:
@@ -350,11 +359,14 @@ Response:
 [{"e": 100, "t": 3, "uuid": "a1"}]
 ```
 
+`d` is an array of `integer`.
+
 ### 101 · account:unsubscribe
 
 **Unsubscribe from account events.**
 
-Cancels the account subscription; no account event comes after the response. Without a subscription it just answers. `d` is an empty array or omitted.
+Unsubscribes from the event codes listed in `d`; the other codes stay. An empty array, `null` or no `d` cancels the whole account subscription. No event of an unsubscribed code comes after the response. Unsubscribing from a code that is not subscribed just answers; an unknown or repeated code fails with `invalid_request`.
+Unsubscribing a code from a subscription to every event leaves the other codes the channel has now: event codes added later do not come. Unsubscribing from the last code ends the subscription.
 
 Request:
 
@@ -367,6 +379,8 @@ Response:
 ```json
 [{"e": 101, "t": 3, "uuid": "a1"}]
 ```
+
+`d` is an array of `integer`.
 
 ### 220 · connection:closing
 

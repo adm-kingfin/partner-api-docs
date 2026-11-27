@@ -27,6 +27,9 @@ theme:
 extra_css:
   - assets/stylesheets/kingfin.css
 
+extra_javascript:
+  - assets/javascripts/permalink.js
+
 extra:
   generator: false
 
@@ -44,6 +47,7 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      permalink_title: Copy link to this section
   - pymdownx.highlight
   - pymdownx.superfences
   - pymdownx.details

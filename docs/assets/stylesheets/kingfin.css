@@ -62,3 +62,27 @@
 
 /* Full-width API reference */
 .kf-reference { height: calc(100vh - 7rem); width: 100%; border: 0; border-radius: .4rem; }
+
+/* Heading links: a visible link icon instead of the hover-only ¶ — also on touch screens.
+   permalink.js copies the link on click and marks it with .kf-copied. */
+.md-typeset .headerlink {
+  opacity: .45; font-size: 0; width: .8rem; height: .8rem; vertical-align: middle;
+  background-color: currentColor; position: relative;
+  -webkit-mask: var(--kf-link-icon) center / contain no-repeat;
+          mask: var(--kf-link-icon) center / contain no-repeat;
+}
+.md-typeset :hover > .headerlink, .md-typeset .headerlink:focus, .md-typeset [id]:target > .headerlink {
+  opacity: 1; color: var(--md-accent-fg-color);
+}
+:root {
+  --kf-link-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10.6 13.4a1 1 0 0 1 0-1.4l3.5-3.5a1 1 0 1 1 1.4 1.4L12 13.4a1 1 0 0 1-1.4 0Zm-2.8 6.4a4.5 4.5 0 0 1-3.2-7.7l2.1-2.1a1 1 0 1 1 1.4 1.4L6 13.5a2.5 2.5 0 0 0 3.5 3.5l2.1-2.1a1 1 0 0 1 1.4 1.4l-2.1 2.1a4.5 4.5 0 0 1-3.1 1.4Zm8.6-5.6a1 1 0 0 1-.7-1.7l2.1-2.1A2.5 2.5 0 0 0 14.3 7l-2.1 2.1a1 1 0 1 1-1.4-1.4l2.1-2.1a4.5 4.5 0 0 1 6.4 6.4l-2.1 2.1a1 1 0 0 1-.8.1Z"/></svg>');
+}
+.md-typeset .headerlink.kf-copied::after {
+  content: "Link copied"; position: absolute; left: 1.2rem; top: 50%; transform: translateY(-50%);
+  font-size: .65rem; font-weight: 400; white-space: nowrap; padding: .1rem .4rem; border-radius: .3rem;
+  background: var(--md-default-fg-color); color: var(--md-default-bg-color);
+  -webkit-mask: none; mask: none;
+}
+
+/* "API reference →" under each endpoint of the guide. */
+.md-typeset .kf-ref-link { font-size: .75rem; }

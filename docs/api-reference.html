@@ -17,7 +17,49 @@
       --scalar-button-1-color: #121215;
     }
     .light-mode { --scalar-color-accent: #7a6900; }
+    /* The "copy link" button next to an operation title shows only on hover; keep it visible. */
+    .copy-link-trailing { opacity: .6 !important; }
+    .copy-link-trailing:hover { opacity: 1 !important; }
   </style>
+  <script>
+    // Links to an operation. The reference is shown in an iframe of reference/, so the
+    // canonical link is reference/#tag/<tag>/<METHOD><path>: reference/ hands its hash to
+    // this page, this page mirrors its own hash back to the address bar, and a link to this
+    // page itself (Scalar's "copy link" button copies one) redirects to reference/.
+    (function () {
+      var parentWin = window.parent;
+      var embedded = parentWin !== window;
+      if (!embedded) {
+        window.location.replace('reference/' + window.location.hash);
+        return;
+      }
+      function mirror() {
+        try {
+          var loc = parentWin.location;
+          if (loc.hash !== window.location.hash) {
+            parentWin.history.replaceState(parentWin.history.state, '',
+              loc.pathname + loc.search + window.location.hash);
+          }
+        } catch (e) { /* another origin: nothing to mirror */ }
+      }
+      ['pushState', 'replaceState'].forEach(function (name) {
+        var orig = window.history[name];
+        window.history[name] = function () {
+          var result = orig.apply(this, arguments);
+          mirror();
+          return result;
+        };
+      });
+      window.addEventListener('hashchange', mirror);
+      // Scalar copies this page's own address; copy the site page instead.
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        var write = navigator.clipboard.writeText.bind(navigator.clipboard);
+        navigator.clipboard.writeText = function (text) {
+          return write(String(text).replace(/api-reference\.html(?=#|$)/, 'reference/'));
+        };
+      }
+    })();
+  </script>
 </head>
 <body>
   <script id="api-reference" data-url="openapi.yaml"></script>
@@ -33,6 +75,14 @@
       proxyUrl: null,
       telemetry: false,
       withDefaultFonts: false,
+      // Placeholders shown in the request examples instead of one YOUR_SECRET_TOKEN for both
+      // headers. Not real values: with Try it hidden they only appear in the example code.
+      authentication: {
+        securitySchemes: {
+          ApiKeyAuth: { value: '<PARTNER_API_KEY>' },
+          PartnerUserJWT: { token: '<USER_JWT>' }
+        }
+      },
       metaData: { title: 'Kingfin Partner API' }
     });
   </script>

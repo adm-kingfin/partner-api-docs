@@ -53,11 +53,13 @@ It decides which field you see in responses — `partner_id` (your affiliate ID)
 
 ### User-scoped requests
 
-Some endpoints act on behalf of a specific user (accounts, deals). These additionally require a **Partner JWT**:
+Some endpoints act on behalf of a specific user (accounts, deals, the pairs of a user). These additionally require a **Partner JWT**:
 
 ```
 Authorization: Bearer <partner-jwt>
 ```
+
+Endpoints added from now on show this in the path: `/partner/user/...` (singular) needs the JWT of one user, while `/partner/users/...` (plural) works on your users with the API key only and takes `user_id` in the body. `GET /accounts/v1` and `/ftt/deals/v1` predate this convention and keep their paths.
 
 The JWT is issued by `POST /partner/token/v1`. It is:
 - Valid for **15 minutes**
@@ -153,7 +155,7 @@ Most partner integrations follow this sequence:
 
 4. [When you need to trade on behalf of a user]
    POST /partner/token/v1          → get (or reuse) partner JWT
-   GET  /partner/ftt/pairs/v1      → pick a pair
+   GET  /partner/user/ftt/pairs/v1 → pick a pair available to this user
    GET  /partner/accounts/v1       → get account_id and check balance
    POST /partner/ftt/deals/v1      → open deal
    GET  /partner/ftt/deals/v1?ids= → poll result
@@ -408,7 +410,7 @@ See [Idempotency](#idempotency) for details.
 | `pair amount limit`, `all pairs amount limit`, `pair amount time limit exceed`, `all pairs amount time limit exceed` and their `(minute)` / `(hour)` / `(day)` variants | Trading volume limit for the pair or across all pairs reached |
 | `max deal limit exceed` | Too many open deals |
 | `invalid duration` | `duration` is outside the pair's `min_duration`–`max_duration` |
-| `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available` | The pair cannot be traded right now or is not available to this user |
+| `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available` | The pair cannot be traded right now or is not available to this user. For `pair unavailable`, request [`GET /user/ftt/pairs/v1`](#get-userfttpairsv1) for this user again and pick another pair from it |
 | `account not found` | `account_id` cannot be used for this deal |
 | `location not allowed`, `restricted personally` | Trading is not allowed for this user |
 | `validation` | Request data rejected |
@@ -543,7 +545,44 @@ Returns all trading pairs currently available for FTT deals.
 
 Disabled, locked and not yet released pairs are excluded from the response automatically: every pair in the list can be traded right now, until its `time_close`. During a break the pair disappears from the list and returns at `time_open`. Cache this list for a few minutes — it changes infrequently, but do not open deals on a cached pair past its `time_close`.
 
-The list is the same for all your users. A pair can still be unavailable to a particular user: a deal on it is refused with `422` `pair unavailable`.
+The list is the same for all your users. A pair can still be unavailable to a particular user: a deal on it is refused with `422` `pair unavailable`. To get only the pairs a user can trade, call [`GET /user/ftt/pairs/v1`](#get-userfttpairsv1) with that user's JWT; on `422` `pair unavailable` request it again and pick another pair.
+
+---
+
+### GET /user/ftt/pairs/v1
+
+Returns the trading pairs available to the user of the token: the pairs of [`GET /ftt/pairs/v1`](#get-fttpairsv1) this user is allowed to trade. The list follows the same availability rules as the check made when you open a deal for this user, as of the moment of the request. A pair can still be switched off or locked between your request and the deal — then the deal gets `422` `pair unavailable`: request the list again and pick another pair.
+
+**Auth:** `X-API-Key` + `Authorization: Bearer <partner-jwt>`
+
+**Response `200`:** the same format and the same pair fields as [`GET /ftt/pairs/v1`](#get-fttpairsv1). `min_duration` and `max_duration` are the ones that apply to this user: a deal for the user checks `duration` against them, and they can differ from the values in `GET /ftt/pairs/v1`. `win_percent` is the payout percentage of this user — the one a deal opened now would get; it can differ from `GET /ftt/pairs/v1` too. The same rules apply to breaks: a pair leaves the list at `time_close` and returns at `time_open`. If no pair is available to the user, `pairs` is an empty array.
+
+```json
+{
+  "pairs": [
+    {
+      "id":           "EURUSD",
+      "title":        "EUR/USD",
+      "group":        "forex",
+      "precision":    5,
+      "min_duration": 30,
+      "max_duration": 300,
+      "win_percent":  82
+    }
+  ]
+}
+```
+
+The set of pairs available to a user can change over time. Request the list again before showing pairs to the user rather than caching it per user for long.
+
+**Errors:**
+
+| Status | `id` | When |
+|--------|------|------|
+| `401` | `unauthorized` | JWT missing, invalid or expired |
+| `403` | `access_denied` | Token of another partner, or the user is blocked or deleted — see [User access refusals](#user-access-refusals) |
+| `429` | `throttling` | Per-user limit reached — see [Rate Limits](#rate-limits) |
+| `502` | `internal` | The list could not be built right now; retry. The full list from `GET /ftt/pairs/v1` is not a substitute: it may contain pairs this user cannot trade |
 
 ---
 
@@ -552,7 +591,7 @@ The list is the same for all your users. A pair can still be unavailable to a pa
 | Scope | Limit |
 |-------|-------|
 | Per partner — all endpoints together, per [partner identifier](#your-partner-identifier) | 600 requests per minute |
-| Per user — user-scoped endpoints, per user ID | 100 requests per minute |
+| Per user — user-scoped endpoints (accounts, deals, deal limits, pairs of a user) together, per user ID | 100 requests per minute |
 | SSO links per user | 30 links per hour |
 
 When a limit is exceeded, the response is:

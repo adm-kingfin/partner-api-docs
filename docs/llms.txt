@@ -10,6 +10,7 @@ Partner sends the manager: server IPs (single or CIDR) for the whitelist, defaul
 
 Every request: `X-API-Key: <key>` header + request from whitelisted IP.
 User-scoped endpoints additionally: `Authorization: Bearer <partner-jwt>`
+Path convention: `/user/...` (singular) = one user, JWT required; `/users/...` (plural) = your users by API key, `user_id` in body. /accounts/v1 and /ftt/deals/v1* predate it and also need the JWT.
 
 Partner JWT: issued by POST /token/v1, 15 min TTL, no refresh, opaque (do not parse). Bound to your partner identifier: a token of another partner → 403.
 Missing/unknown API key, or missing/invalid/expired JWT → 401 `unauthorized`.
@@ -135,7 +136,7 @@ Errors:
 - 400 `ctx.code=idempotency_key_required` — missing Idempotency-Key or not 8–128 chars
 - 409 `ctx.code=idempotency_key_in_flight` — see Idempotency
 - 422 `ctx.code=idempotency_key_conflict` — same key, different body
-- 422 business errors, `ctx.code` is lowercase text, compare exactly: `insufficiently funds`, `not enough money to trade`, `common not enough real funds`, `insufficient bonus balance`, `amount limit`, `pair amount limit`, `all pairs amount limit`, `pair amount time limit exceed` / `all pairs amount time limit exceed` (+ ` (minute)`/` (hour)`/` (day)` variants), `max deal limit exceed`, `invalid duration`, `pair unavailable`, `pair unavailable on open`, `pair unavailable on close`, `quotes not available`, `account not found`, `location not allowed`, `restricted personally`, `validation`. Others may appear — any 422 means the deal was not opened.
+- 422 business errors, `ctx.code` is lowercase text, compare exactly: `insufficiently funds`, `not enough money to trade`, `common not enough real funds`, `insufficient bonus balance`, `amount limit`, `pair amount limit`, `all pairs amount limit`, `pair amount time limit exceed` / `all pairs amount time limit exceed` (+ ` (minute)`/` (hour)`/` (day)` variants), `max deal limit exceed`, `invalid duration`, `pair unavailable` (re-request GET /user/ftt/pairs/v1, pick another pair), `pair unavailable on open`, `pair unavailable on close`, `quotes not available`, `account not found`, `location not allowed`, `restricted personally`, `validation`. Others may appear — any 422 means the deal was not opened.
 
 ---
 
@@ -168,7 +169,7 @@ Response 200:
 
 ### GET /ftt/pairs/v1
 Auth: X-API-Key (no JWT)
-Available FTT trading pairs. Disabled/locked/not yet released pairs excluded. Same list for all users; a pair can still be unavailable to a particular user → deal gets 422 `pair unavailable`.
+Available FTT trading pairs. Disabled/locked/not yet released pairs excluded. Same list for all users; a pair can still be unavailable to a particular user → deal gets 422 `pair unavailable`. Pairs a given user can trade: GET /user/ftt/pairs/v1.
 
 Response 200:
 ```json
@@ -180,9 +181,19 @@ Response 200:
 
 Use `id` as `pair` in deal requests.
 
+---
+
+### GET /user/ftt/pairs/v1
+Auth: X-API-Key + Bearer JWT
+Pairs available to the user of the token: the subset of GET /ftt/pairs/v1 this user may trade. Uses the same availability rules as the check on POST /ftt/deals/v1 for the same user; the answer is as of the request — a pair switched off or locked afterwards still gets 422 `pair unavailable` on a deal. Same response format and fields as GET /ftt/pairs/v1, but `min_duration`/`max_duration` are the ones that apply to this user — the deal checks `duration` against them, and they can differ from GET /ftt/pairs/v1; `win_percent` is the payout of this user — the one a deal opened now would get (it can differ from GET /ftt/pairs/v1 too); nothing available → `{"pairs":[]}`.
+The set can change over time — re-request it, do not cache per user for long.
+On deal 422 `pair unavailable` → re-request this list and pick another pair from the fresh one.
+
+Errors: 401 `unauthorized` (JWT), 403 `access_denied` (user refusal codes above), 429 `throttling` (per-user limit), 502 `internal` — list not available now, retry; do not fall back to GET /ftt/pairs/v1 (it may contain pairs this user cannot trade).
+
 ## Rate limits
 
-600 req/min per partner (all endpoints), 100 req/min per user (user-scoped endpoints), 30 SSO links/user/hour.
+600 req/min per partner (all endpoints), 100 req/min per user (user-scoped endpoints together: accounts, deals, deal limits, pairs of a user), 30 SSO links/user/hour.
 429 `throttling`, `ctx.limit` = limit hit, `ctx.expired` = window reset (Unix seconds, fractional). Retry after it.
 
 ## Idempotency (POST /ftt/deals/v1)
@@ -202,7 +213,7 @@ On network error or 5xx/timeout: outcome unknown — retry with the SAME key, ne
 POST /users/v1            → user_id
 POST /token/v1            → bearer JWT (reissue before 15 min elapse or on 401)
 POST /users/sso-link/v2   → one-time URL → redirect user's browser
-GET  /ftt/pairs/v1        → pick pair + check min/max duration
+GET  /user/ftt/pairs/v1   → pick pair available to the user + check min/max duration
 GET  /accounts/v1         → get account_id, check balance vs limits
 GET  /ftt/deals/v1/limits → validate amount >= min
 POST /ftt/deals/v1        → deal_id

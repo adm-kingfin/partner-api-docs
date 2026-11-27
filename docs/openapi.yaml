@@ -538,7 +538,8 @@ paths:
 
         - Disabled, locked or not yet released pairs are excluded.
         - The list is the same for all users. A pair can still be unavailable to a particular user:
-          a deal on it gets 422 `pair unavailable`.
+          a deal on it gets 422 `pair unavailable`. The pairs a given user can trade are returned by
+          `GET /user/ftt/pairs/v1`.
         - `win_percent` is included when available (omitted otherwise).
         - Every listed pair can be traded now, until its `time_close`.
         - `time_close` / `time_open` are the pair's next trading break as Unix timestamps: trading
@@ -576,6 +577,76 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /user/ftt/pairs/v1:
+    get:
+      tags: [Pairs]
+      summary: List trading pairs available to the user
+      description: |
+        Returns the trading pairs available to the user of the token: the pairs of
+        `GET /ftt/pairs/v1` this user is allowed to trade, by the same availability rules as
+        the check made when a deal is opened for this user, as of the moment of the request.
+
+        - Same response format, pair fields and break rules as `GET /ftt/pairs/v1`.
+        - `min_duration` / `max_duration` are the ones that apply to this user: a deal for the
+          user checks `duration` against them, and they can differ from `GET /ftt/pairs/v1`.
+        - `win_percent` is the payout percentage of this user — the one a deal opened now would
+          get; it can differ from `GET /ftt/pairs/v1` too.
+        - No pair available to the user → `pairs` is an empty array.
+        - The set can change over time: request it again rather than caching it per user
+          for long.
+        - A pair can be switched off or locked between this request and the deal; then the
+          deal gets 422 `pair unavailable`: request the list again and pick another pair.
+
+        `/user/...` (singular) marks endpoints that need the JWT of one user.
+      security:
+        - ApiKeyAuth: []
+          PartnerUserJWT: []
+      responses:
+        "200":
+          description: Pairs available to the user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairsListResponse"
+              example:
+                pairs:
+                  - id: EURUSD
+                    title: EUR/USD
+                    group: forex
+                    precision: 5
+                    min_duration: 30
+                    max_duration: 300
+                    win_percent: 82
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ForbiddenUser"
+        "429":
+          description: Per-user rate limit reached (shared by all user-scoped endpoints)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: throttling
+                  msg: Too many requests
+                  ctx:
+                    limit: 100
+                    expired: 1753700060.123
+        "502":
+          description: |
+            The list could not be built right now; retry. Do not fall back to `GET /ftt/pairs/v1`:
+            it may contain pairs this user cannot trade.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                error:
+                  id: internal
+                  msg: upstream error
 
 components:
 

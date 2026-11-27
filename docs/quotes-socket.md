@@ -212,7 +212,7 @@ A failed request gets a response with `err` and no `d`. The connection stays ope
 
 | `code` | When |
 |--------|------|
-| `invalid_request` | The frame is not a JSON array, the data does not match the event, or a pair is unknown. If the frame could not be parsed at all, the response has `e: 0` and no `uuid` |
+| `invalid_request` | The frame is not a JSON array, the data does not match the event, or a pair is unknown. For the account channel: an event code is unknown (`unknown event code: 500`), listed twice (`duplicate event code: 400`) or subscribed already (`already subscribed: 400`; `already subscribed` for a repeated `100` while subscribed to every event). If the frame could not be parsed at all, the response has `e: 0` and no `uuid` |
 | `unknown_event` | The event code is not supported |
 | `system_error` | Internal error — retry the request; contact support if it persists |
 

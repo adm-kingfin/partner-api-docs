@@ -229,7 +229,7 @@ Refusals are not HTTP statuses: the handshake completes (101), then the server c
 
 Both directions: a JSON array of events, possibly several per frame — process the whole array.
 Event: `{"e": <code>, "t": <1 push (default) | 2 request | 3 response>, "uuid": "<your id>", "d": <data>, "err": [{"mess","code"}]}`
-Response: same `e` and `uuid`, `t: 3`; failed response has `err` and no `d`. Error codes: `invalid_request` (bad data, unknown or disabled pair, repeated account subscription; unparseable frame → `e: 0`), `unknown_event`, `system_error` (retry). Connection stays open on errors.
+Response: same `e` and `uuid`, `t: 3`; failed response has `err` and no `d`. Error codes: `invalid_request` (bad data, unknown or disabled pair, unknown or repeated account event code, code already subscribed; unparseable frame → `e: 0`), `unknown_event`, `system_error` (retry). Connection stays open on errors.
 
 ## Events
 
